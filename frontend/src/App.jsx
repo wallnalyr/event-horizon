@@ -279,28 +279,26 @@ function App() {
   }
 
   const handleDownload = async (file) => {
-    // For downloads with session token, we need to handle it differently
-    if (sessionToken && isLocked) {
-      try {
-        const response = await fetch(`/api/files/${file.id}/download`, {
-          headers: getHeaders()
-        })
-        if (!response.ok) throw new Error('Download failed')
+    // Always use fetch + blob approach to avoid iOS PWA black screen issue
+    // (window.location.href can trap users in share sheet with no back button)
+    try {
+      const response = await fetch(`/api/files/${file.id}/download`, {
+        headers: getHeaders()
+      })
+      if (!response.ok) throw new Error('Download failed')
 
-        const blob = await response.blob()
-        const url = window.URL.createObjectURL(blob)
-        const a = document.createElement('a')
-        a.href = url
-        a.download = file.name
-        document.body.appendChild(a)
-        a.click()
-        window.URL.revokeObjectURL(url)
-        document.body.removeChild(a)
-      } catch (err) {
-        toast.error(err.message)
-      }
-    } else {
-      window.location.href = `/api/files/${file.id}/download`
+      const blob = await response.blob()
+      const url = window.URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = file.name
+      document.body.appendChild(a)
+      a.click()
+      document.body.removeChild(a)
+      // Delay revoking URL to ensure iOS has time to process
+      setTimeout(() => window.URL.revokeObjectURL(url), 1000)
+    } catch (err) {
+      toast.error(err.message)
     }
   }
 

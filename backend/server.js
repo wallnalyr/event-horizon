@@ -874,8 +874,9 @@ app.get('/api/files/:id/download', (req, res) => {
   }
 
   // Security: Use pre-sanitized name for Content-Disposition
+  // Use application/octet-stream to force download on iOS Safari (which ignores attachment for PDFs, etc.)
   res.set({
-    'Content-Type': file.mimetype || 'application/octet-stream',
+    'Content-Type': 'application/octet-stream',
     'Content-Disposition': `attachment; filename="${file.name}"; filename*=UTF-8''${encodeURIComponent(file.originalName || file.name)}`,
     'Content-Length': buffer.length,
     'X-Content-Type-Options': 'nosniff', // Prevent MIME sniffing
