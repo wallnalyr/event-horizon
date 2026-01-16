@@ -1,0 +1,132 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html {
+    font-family: 'Outfit', sans-serif;
+    font-size: 14px;
+    line-height: 1.6;
+  }
+
+  body {
+    @apply bg-kurz-bg text-kurz-dark antialiased;
+    min-height: 100vh;
+    min-height: 100dvh;
+    overflow-x: hidden;
+  }
+
+  /* Prevent zoom on input focus on iOS */
+  input,
+  textarea,
+  select {
+    font-size: 16px !important;
+  }
+
+  /* Support for iOS safe areas - all 4 edges */
+  @supports (padding: env(safe-area-inset-top)) {
+    .pt-safe {
+      padding-top: env(safe-area-inset-top);
+    }
+    .pb-safe {
+      padding-bottom: env(safe-area-inset-bottom);
+    }
+    .pl-safe {
+      padding-left: env(safe-area-inset-left);
+    }
+    .pr-safe {
+      padding-right: env(safe-area-inset-right);
+    }
+    .px-safe {
+      padding-left: env(safe-area-inset-left);
+      padding-right: env(safe-area-inset-right);
+    }
+    .py-safe {
+      padding-top: env(safe-area-inset-top);
+      padding-bottom: env(safe-area-inset-bottom);
+    }
+    .p-safe {
+      padding-top: env(safe-area-inset-top);
+      padding-bottom: env(safe-area-inset-bottom);
+      padding-left: env(safe-area-inset-left);
+      padding-right: env(safe-area-inset-right);
+    }
+  }
+}
+
+@layer components {
+  .kurz-border {
+    border: 2px solid #080f2b;
+  }
+
+  .kurz-card-shadow {
+    box-shadow: 4px 4px 0 0 #080f2b;
+  }
+
+  .kurz-shadow-sm {
+    box-shadow: 2px 2px 0 0 #080f2b;
+  }
+
+  .geometric-bg {
+    background-image: radial-gradient(circle, rgba(8, 15, 43, 0.08) 1px, transparent 1px);
+    background-size: 24px 24px;
+  }
+
+  /* Line-Numbered Textarea */
+  .kurz-line-textarea {
+    @apply flex border-2 border-kurz-dark/50 rounded overflow-hidden bg-white;
+    transition: border-color 0.2s, box-shadow 0.2s;
+  }
+
+  .kurz-line-textarea:focus-within {
+    @apply border-kurz-blue;
+    box-shadow: 0 0 0 2px rgba(0, 68, 204, 0.2);
+  }
+
+  .line-number-gutter {
+    @apply border-r-2 border-kurz-dark/30 px-2 py-4 text-right overflow-hidden select-none;
+    font-family: 'Space Mono', monospace;
+    font-size: 12px;
+    color: rgba(8, 15, 43, 0.6);
+    background: white;
+    min-width: 3rem;
+  }
+}
+
+@layer utilities {
+  /* Screen reader only */
+  .sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border-width: 0;
+  }
+
+  .focus\:not-sr-only:focus {
+    position: static;
+    width: auto;
+    height: auto;
+    padding: initial;
+    margin: initial;
+    overflow: visible;
+    clip: auto;
+    white-space: normal;
+  }
+}
+
+/* Reduced motion support */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
