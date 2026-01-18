@@ -1,6 +1,39 @@
-node_modules
-dist
+# Dependencies
+node_modules/
+
+# Build outputs
+dist/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Environment
 .env
 .env.*
+
+# Logs
 *.log
+
+# OS
 .DS_Store
+Thumbs.db
+
+# Go
+vendor/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Test coverage
+coverage.out
+coverage.html
+
+# Local development files
+styleguide.txt
+flow.md

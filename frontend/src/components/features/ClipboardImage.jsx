@@ -2,6 +2,8 @@ import { useState, useRef, useEffect } from 'react'
 import { toast } from 'sonner'
 import { ConfirmModal } from '../ui/Modal'
 
+const MAX_IMAGE_SIZE = 1 * 1024 * 1024 // 1MB
+
 export function ClipboardImage({
   imageData,
   onPaste,
@@ -38,6 +40,12 @@ export function ClipboardImage({
   }, [sessionToken])
 
   const uploadImage = async (file) => {
+    // Validate file size
+    if (file.size > MAX_IMAGE_SIZE) {
+      toast.error('Image too large. Maximum size is 1MB')
+      return
+    }
+
     try {
       // Convert to base64
       const reader = new FileReader()
@@ -102,13 +110,25 @@ export function ClipboardImage({
 
     setCopying(true)
     try {
-      // Fetch the image data
-      const headers = sessionToken ? { 'X-Session-Token': sessionToken } : {}
-      const response = await fetch('/api/clipboard-image/data', { headers })
+      let blob
 
-      if (!response.ok) throw new Error('Failed to fetch image')
+      // E2EE: If we have locally decrypted data, use that instead of fetching
+      if (imageData.localDecryptedData) {
+        // localDecryptedData is base64 encoded
+        const binaryString = atob(imageData.localDecryptedData)
+        const bytes = new Uint8Array(binaryString.length)
+        for (let i = 0; i < binaryString.length; i++) {
+          bytes[i] = binaryString.charCodeAt(i)
+        }
+        blob = new Blob([bytes], { type: imageData.mimeType || 'image/png' })
+      } else {
+        // Fetch the image data from server
+        const headers = sessionToken ? { 'X-Session-Token': sessionToken } : {}
+        const response = await fetch('/api/clipboard-image/data', { headers })
 
-      const blob = await response.blob()
+        if (!response.ok) throw new Error('Failed to fetch image')
+        blob = await response.blob()
+      }
 
       // Try to copy to clipboard
       if (navigator.clipboard && navigator.clipboard.write) {
@@ -147,9 +167,11 @@ export function ClipboardImage({
     return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i]
   }
 
-  // Build image URL with cache busting
+  // Build image URL - use local data URL if decrypted locally, otherwise fetch from server
   const imageUrl = imageData?.hasImage
-    ? `/api/clipboard-image/data?t=${imageData.updatedAt || Date.now()}`
+    ? (imageData.localDecryptedData
+        ? `data:${imageData.mimeType || 'image/png'};base64,${imageData.localDecryptedData}`
+        : `/api/clipboard-image/data?t=${imageData.updatedAt || Date.now()}`)
     : null
 
   return (

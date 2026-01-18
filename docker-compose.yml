@@ -1,42 +1,73 @@
 version: '3.8'
-
-# Event Horizon - File sharing and clipboard sync
-# Usage: docker compose up -d --build
-# Access at https://localhost:9000 (accept self-signed certificate)
-
 services:
-  event-horizon:
+  fileez:
     build: .
-    container_name: event-horizon
+    container_name: fileez
     ports:
       - "9000:9000"
     environment:
-      - NODE_ENV=production
       - PORT=9000
-      - ENABLE_SSL=true
-      # Security: File/clipboard expiry (customize as needed)
-      - FILE_EXPIRY_MS=86400000      # 24 hours
-      - CLIPBOARD_EXPIRY_MS=3600000  # 1 hour
-      # Security: CORS origins (comma-separated, leave empty for all)
-      # - CORS_ORIGINS=https://localhost:9000
+      - HOST=0.0.0.0
+      # Security: Memory limits
+      - MAX_FILE_SIZE=104857600    # 100MB
+      - MAX_MEMORY=536870912       # 512MB
+      # Security: File/clipboard expiry
+      - FILE_EXPIRY=24h
+      - CLIPBOARD_EXPIRY=1h
+      # Security: Rate limiting
+      - RATE_LIMIT=600             # 600/min general
+      - UPLOAD_RATE_LIMIT=20       # 20/min uploads
+      # Security: CORS
+      - ENABLE_CORS=true
+      # Feature flags
+      - ENABLE_CLIPBOARD=true
+      - ENABLE_CLIPBOARD_IMAGE=true
+      - ENABLE_FILE_SHARING=true
     restart: unless-stopped
+
     # Security: Send SIGTERM for graceful shutdown (secure data wipe)
     stop_signal: SIGTERM
     stop_grace_period: 30s
-    # Security: Memory limits to prevent DoS
+
+    # Security: Memory limits
     deploy:
       resources:
         limits:
           memory: 1G
-    # Security: Drop all capabilities
+        reservations:
+          memory: 256M
+
+    # Security: Drop all capabilities, add IPC_LOCK for memguard
     cap_drop:
       - ALL
+    cap_add:
+      - IPC_LOCK  # Required for mlock (memguard secure memory)
+
     # Security: No new privileges
     security_opt:
       - no-new-privileges:true
+
+    # Security: Read-only filesystem
+    read_only: true
+    tmpfs:
+      - /tmp:noexec,nosuid,nodev,size=64M
+
+    # Security: Prevent swapping secrets to disk
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+      core:
+        soft: 0
+        hard: 0  # No core dumps (prevent secret leakage)
+
+    # Disable swap at container level
+    mem_swappiness: 0
+
     healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "--no-check-certificate", "https://127.0.0.1:9000/api/health"]
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:9000/api/health"]
       interval: 30s
       timeout: 3s
       start_period: 10s
       retries: 3
+
