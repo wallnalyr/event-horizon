@@ -173,18 +173,20 @@ func (h *ClipboardHandler) DeleteText(w http.ResponseWriter, r *http.Request) {
 
 // ClipboardImageResponse is the response for image clipboard metadata.
 type ClipboardImageResponse struct {
-	HasImage     bool   `json:"hasImage"`
-	MimeType     string `json:"mimeType,omitempty"`
-	Size         int    `json:"size,omitempty"`
-	EncryptedB64 string `json:"encrypted_b64,omitempty"` // E2EE: encrypted image when locked
+	HasImage         bool   `json:"hasImage"`
+	MimeType         string `json:"mimeType,omitempty"`
+	Size             int    `json:"size,omitempty"`
+	EncryptedB64     string `json:"encrypted_b64,omitempty"`     // E2EE: encrypted image when locked
+	EncryptedMimeB64 string `json:"encryptedMime_b64,omitempty"` // E2EE: encrypted MIME type when locked
 }
 
 // ClipboardImageRequest is the request body for setting image clipboard.
-// When session is locked, client sends encrypted_b64 instead of image.
+// When session is locked, client sends encrypted_b64 (+ encryptedMime_b64) instead of image.
 type ClipboardImageRequest struct {
-	Image        string `json:"image,omitempty"`        // Base64 encoded image data (plaintext mode)
-	MimeType     string `json:"mimetype"`               // MIME type of the image
-	EncryptedB64 string `json:"encrypted_b64,omitempty"` // E2EE: encrypted image when locked
+	Image            string `json:"image,omitempty"`             // Base64 encoded image data (plaintext mode)
+	MimeType         string `json:"mimetype,omitempty"`          // MIME type of the image (plaintext mode)
+	EncryptedB64     string `json:"encrypted_b64,omitempty"`     // E2EE: encrypted image when locked
+	EncryptedMimeB64 string `json:"encryptedMime_b64,omitempty"` // E2EE: encrypted MIME type when locked
 }
 
 // GetImageInfo handles GET /api/clipboard-image
@@ -203,10 +205,10 @@ func (h *ClipboardHandler) GetImageInfo(w http.ResponseWriter, r *http.Request) 
 		}
 
 		resp := ClipboardImageResponse{
-			HasImage:     true,
-			MimeType:     mimeType,
-			Size:         len(encrypted),
-			EncryptedB64: base64.StdEncoding.EncodeToString(encrypted),
+			HasImage:         true,
+			EncryptedMimeB64: mimeType, // opaque encrypted MIME blob (server cannot read it)
+			Size:             len(encrypted),
+			EncryptedB64:     base64.StdEncoding.EncodeToString(encrypted),
 		}
 
 		w.Header().Set("Content-Type", "application/json")
@@ -259,16 +261,16 @@ func (h *ClipboardHandler) SetImage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Validate MIME type
-	if !validate.IsImageMIMEType(req.MimeType) {
-		http.Error(w, "Invalid image type", http.StatusBadRequest)
-		return
-	}
-
 	var size int
 
-	// E2EE: If session is locked and encrypted data provided, store as encrypted
+	// E2EE: If session is locked and encrypted data provided, store as encrypted.
+	// The MIME type is client-encrypted too, so the server cannot validate it.
 	if h.session.IsLocked() && req.EncryptedB64 != "" {
+		if req.EncryptedMimeB64 == "" {
+			http.Error(w, "Missing encrypted MIME type", http.StatusBadRequest)
+			return
+		}
+
 		// Decode encrypted data
 		encrypted, err := decodeBase64(req.EncryptedB64)
 		if err != nil {
@@ -276,11 +278,15 @@ func (h *ClipboardHandler) SetImage(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		// Store encrypted image (server cannot decrypt)
-		h.clipboard.SetEncryptedImage(encrypted, req.MimeType)
+		// Store encrypted image + encrypted MIME blob (server cannot decrypt either)
+		h.clipboard.SetEncryptedImage(encrypted, req.EncryptedMimeB64)
 		size = len(encrypted)
 	} else {
 		// Normal plaintext mode
+		if !validate.IsImageMIMEType(req.MimeType) {
+			http.Error(w, "Invalid image type", http.StatusBadRequest)
+			return
+		}
 		if req.Image == "" {
 			http.Error(w, "No image data provided", http.StatusBadRequest)
 			return

@@ -100,7 +100,7 @@ func NewFileStore(session *SessionManager, memory *secure.MemoryTracker, maxFile
 	return store
 }
 
-// Store stores a file and returns its ID (plaintext in SecureBuffer).
+// Store stores a file and returns its ID (plaintext in FortifiedBuffer).
 // E2EE: This is only called when session is unlocked. When locked, encrypted
 // blobs are stored via SetEncryptedFiles.
 // WARNING: The content slice is always shredded after this call, even on error.
@@ -171,7 +171,7 @@ func (fs *FileStore) Store(filename string, mimeType string, content []byte) (st
 	return id, nil
 }
 
-// Get retrieves a file by ID (plaintext from SecureBuffer).
+// Get retrieves a file by ID (plaintext from FortifiedBuffer).
 // E2EE: This is only called when session is unlocked. When locked, encrypted
 // metadata is retrieved via GetEncryptedFilesMeta and content via GetEncryptedContent.
 func (fs *FileStore) Get(id string) (*StoredFile, []byte, error) {
@@ -197,7 +197,7 @@ func (fs *FileStore) Get(id string) (*StoredFile, []byte, error) {
 		return nil, nil, ErrFileExpired
 	}
 
-	// Get plaintext content from SecureBuffer
+	// Get plaintext content from FortifiedBuffer
 	if file.data == nil {
 		// No plaintext data - might be encrypted (locked state)
 		return nil, nil, ErrFileNotFound

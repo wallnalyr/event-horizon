@@ -36,7 +36,7 @@ type LockRequest struct {
 	// Encrypted data from client (server cannot decrypt)
 	EncryptedClipboardB64 string                    `json:"encryptedClipboard_b64,omitempty"`
 	EncryptedImageB64     string                    `json:"encryptedImage_b64,omitempty"`
-	ImageMimeType         string                    `json:"imageMimeType,omitempty"`
+	EncryptedImageMimeB64 string                    `json:"encryptedImageMime_b64,omitempty"` // encrypted image MIME type
 	EncryptedFiles        []store.EncryptedFileInfo `json:"encryptedFiles,omitempty"`
 }
 
@@ -54,7 +54,7 @@ type UnlockResponse struct {
 	HasSession            bool                      `json:"hasSession"`
 	EncryptedClipboardB64 string                    `json:"encryptedClipboard_b64,omitempty"`
 	EncryptedImageB64     string                    `json:"encryptedImage_b64,omitempty"`
-	ImageMimeType         string                    `json:"imageMimeType,omitempty"`
+	EncryptedImageMimeB64 string                    `json:"encryptedImageMime_b64,omitempty"`
 	EncryptedFiles        []store.EncryptedFileMeta `json:"encryptedFiles,omitempty"`
 }
 
@@ -138,11 +138,11 @@ func (h *LockHandler) Lock(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 
-			// Store encrypted clipboard image
+			// Store encrypted clipboard image (+ encrypted MIME blob)
 			if req.EncryptedImageB64 != "" {
 				encrypted, err := base64.StdEncoding.DecodeString(req.EncryptedImageB64)
 				if err == nil {
-					h.clipboard.SetEncryptedImage(encrypted, req.ImageMimeType)
+					h.clipboard.SetEncryptedImage(encrypted, req.EncryptedImageMimeB64)
 				}
 			}
 		}
@@ -230,10 +230,10 @@ func (h *LockHandler) Unlock(w http.ResponseWriter, r *http.Request) {
 			resp.EncryptedClipboardB64 = base64.StdEncoding.EncodeToString(encryptedText)
 		}
 
-		// Get encrypted clipboard image
-		if encryptedImage, mimeType := h.clipboard.GetEncryptedImage(); encryptedImage != nil {
+		// Get encrypted clipboard image (+ encrypted MIME blob)
+		if encryptedImage, encryptedMime := h.clipboard.GetEncryptedImage(); encryptedImage != nil {
 			resp.EncryptedImageB64 = base64.StdEncoding.EncodeToString(encryptedImage)
-			resp.ImageMimeType = mimeType
+			resp.EncryptedImageMimeB64 = encryptedMime
 		}
 	}
 

@@ -35,10 +35,14 @@ type ClipboardEntry struct {
 
 	// Metadata
 	contentType ClipboardType
-	mimeType    string // For images: "image/png", "image/jpeg", etc.
+	mimeType    string // Plaintext image MIME when unlocked; encrypted MIME blob (base64) when sealed
 	size        int
 	createdAt   time.Time
 	expiresAt   time.Time
+
+	// allocated is the exact number of bytes reserved from the MemoryTracker for
+	// this entry, so shredding frees exactly what was allocated (no over/under-free).
+	allocated int64
 }
 
 // ClipboardStore manages secure clipboard storage.
@@ -80,7 +84,7 @@ func NewClipboardStore(session *SessionManager, memory *secure.MemoryTracker, ex
 	return store
 }
 
-// SetText stores text content in the clipboard (plaintext in SecureBuffer).
+// SetText stores text content in the clipboard (plaintext in FortifiedBuffer).
 // E2EE: This is only called when session is unlocked. When locked, encrypted
 // blobs are stored via SetEncryptedText.
 // WARNING: The content slice is always shredded after this call, even on error.
@@ -109,12 +113,15 @@ func (cs *ClipboardStore) SetText(content []byte) error {
 		expiresAt:   now.Add(cs.expiry),
 	}
 
+	// Account the real footprint (data + rotating XOR pad ~2x).
+	footprint := int64(contentLen) * plaintextFootprintFactor
+
 	// Now acquire lock briefly to swap entries
 	cs.mu.Lock()
 
 	// Check memory limit
 	if cs.memory != nil {
-		if err := cs.memory.Allocate(int64(contentLen)); err != nil {
+		if err := cs.memory.Allocate(footprint); err != nil {
 			cs.mu.Unlock()
 			// Clean up the new entry we created
 			if newEntry.data != nil {
@@ -123,6 +130,7 @@ func (cs *ClipboardStore) SetText(content []byte) error {
 			return err
 		}
 	}
+	newEntry.allocated = footprint
 
 	// Swap entries - grab old entry for deferred shredding
 	oldEntry := cs.text
@@ -139,7 +147,7 @@ func (cs *ClipboardStore) SetText(content []byte) error {
 	return nil
 }
 
-// GetText retrieves text content from the clipboard (plaintext from SecureBuffer).
+// GetText retrieves text content from the clipboard (plaintext from FortifiedBuffer).
 // E2EE: This is only called when session is unlocked. When locked, encrypted
 // blobs are retrieved via GetEncryptedText.
 func (cs *ClipboardStore) GetText() ([]byte, error) {
@@ -159,7 +167,7 @@ func (cs *ClipboardStore) GetText() ([]byte, error) {
 		return nil, ErrClipboardExpired
 	}
 
-	// Return copy of plaintext from SecureBuffer
+	// Return copy of plaintext from FortifiedBuffer
 	if cs.text.data == nil {
 		// No plaintext data - might be encrypted (locked state)
 		return nil, ErrClipboardEmpty
@@ -179,7 +187,7 @@ func (cs *ClipboardStore) GetText() ([]byte, error) {
 	return result, nil
 }
 
-// SetImage stores image content in the clipboard (plaintext in SecureBuffer).
+// SetImage stores image content in the clipboard (plaintext in FortifiedBuffer).
 // E2EE: This is only called when session is unlocked. When locked, encrypted
 // blobs are stored via SetEncryptedImage.
 // WARNING: The content slice is always shredded after this call, even on error.
@@ -209,12 +217,15 @@ func (cs *ClipboardStore) SetImage(content []byte, mimeType string) error {
 		expiresAt:   now.Add(cs.expiry),
 	}
 
+	// Account the real footprint (data + rotating XOR pad ~2x).
+	footprint := int64(contentLen) * plaintextFootprintFactor
+
 	// Now acquire lock briefly to swap entries
 	cs.mu.Lock()
 
 	// Check memory limit
 	if cs.memory != nil {
-		if err := cs.memory.Allocate(int64(contentLen)); err != nil {
+		if err := cs.memory.Allocate(footprint); err != nil {
 			cs.mu.Unlock()
 			// Clean up the new entry we created
 			if newEntry.data != nil {
@@ -223,6 +234,7 @@ func (cs *ClipboardStore) SetImage(content []byte, mimeType string) error {
 			return err
 		}
 	}
+	newEntry.allocated = footprint
 
 	// Swap entries - grab old entry for deferred shredding
 	oldEntry := cs.image
@@ -238,7 +250,7 @@ func (cs *ClipboardStore) SetImage(content []byte, mimeType string) error {
 	return nil
 }
 
-// GetImage retrieves image content from the clipboard (plaintext from SecureBuffer).
+// GetImage retrieves image content from the clipboard (plaintext from FortifiedBuffer).
 // E2EE: This is only called when session is unlocked. When locked, encrypted
 // blobs are retrieved via GetEncryptedImage.
 func (cs *ClipboardStore) GetImage() ([]byte, string, error) {
@@ -260,7 +272,7 @@ func (cs *ClipboardStore) GetImage() ([]byte, string, error) {
 
 	mimeType := cs.image.mimeType
 
-	// Return copy of plaintext from SecureBuffer
+	// Return copy of plaintext from FortifiedBuffer
 	if cs.image.data == nil {
 		// No plaintext data - might be encrypted (locked state)
 		return nil, "", ErrClipboardEmpty
@@ -401,9 +413,10 @@ func (cs *ClipboardStore) shredEntry(entry *ClipboardEntry) {
 	entry.mu.Lock()
 	defer entry.mu.Unlock()
 
-	// Free memory
-	if cs.memory != nil {
-		cs.memory.Free(int64(entry.size))
+	// Free exactly what was allocated for this entry (0 if never tracked).
+	if cs.memory != nil && entry.allocated > 0 {
+		cs.memory.Free(entry.allocated)
+		entry.allocated = 0
 	}
 
 	// Shred data (FortifiedBuffer handles its own secure destruction)
@@ -430,9 +443,10 @@ func (cs *ClipboardStore) shredEntryAsync(entry *ClipboardEntry) {
 		entry.mu.Lock()
 		defer entry.mu.Unlock()
 
-		// Free memory
-		if cs.memory != nil {
-			cs.memory.Free(int64(entry.size))
+		// Free exactly what was allocated for this entry (0 if never tracked).
+		if cs.memory != nil && entry.allocated > 0 {
+			cs.memory.Free(entry.allocated)
+			entry.allocated = 0
 		}
 
 		// Shred data (FortifiedBuffer handles its own secure destruction)
@@ -524,11 +538,21 @@ func (cs *ClipboardStore) SetEncryptedText(encrypted []byte) {
 		cs.shredEntry(cs.text)
 	}
 
+	// Account the ciphertext footprint. Best-effort: if the tracker rejects it,
+	// still store (sealing must not lose data) but leave allocated at 0.
+	var allocated int64
+	if cs.memory != nil {
+		if err := cs.memory.Allocate(int64(len(encrypted))); err == nil {
+			allocated = int64(len(encrypted))
+		}
+	}
+
 	// Store encrypted blob (server cannot decrypt)
 	cs.text = &ClipboardEntry{
 		encrypted:   make([]byte, len(encrypted)),
 		contentType: ClipboardTypeText,
 		size:        len(encrypted),
+		allocated:   allocated,
 		createdAt:   time.Now(),
 		expiresAt:   time.Now().Add(cs.expiry),
 	}
@@ -560,7 +584,9 @@ func (cs *ClipboardStore) GetEncryptedText() []byte {
 
 // SetEncryptedImage stores an already-encrypted image blob from the client.
 // Used during E2EE lock operation - server cannot decrypt this data.
-func (cs *ClipboardStore) SetEncryptedImage(encrypted []byte, mimeType string) {
+// encryptedMime is the client-encrypted MIME type (opaque base64 blob); the
+// server never sees the plaintext image type.
+func (cs *ClipboardStore) SetEncryptedImage(encrypted []byte, encryptedMime string) {
 	if len(encrypted) == 0 {
 		return
 	}
@@ -573,20 +599,29 @@ func (cs *ClipboardStore) SetEncryptedImage(encrypted []byte, mimeType string) {
 		cs.shredEntry(cs.image)
 	}
 
-	// Store encrypted blob (server cannot decrypt)
+	// Account the ciphertext footprint (best-effort; do not lose data on seal).
+	var allocated int64
+	if cs.memory != nil {
+		if err := cs.memory.Allocate(int64(len(encrypted))); err == nil {
+			allocated = int64(len(encrypted))
+		}
+	}
+
+	// Store encrypted blob (server cannot decrypt content or MIME type)
 	cs.image = &ClipboardEntry{
 		encrypted:   make([]byte, len(encrypted)),
 		contentType: ClipboardTypeImage,
-		mimeType:    mimeType,
+		mimeType:    encryptedMime,
 		size:        len(encrypted),
+		allocated:   allocated,
 		createdAt:   time.Now(),
 		expiresAt:   time.Now().Add(cs.expiry),
 	}
 	copy(cs.image.encrypted, encrypted)
 }
 
-// GetEncryptedImage returns the encrypted image blob and mime type for client-side decryption.
-// Returns nil if no encrypted image is stored.
+// GetEncryptedImage returns the encrypted image blob and the encrypted MIME blob
+// for client-side decryption. Returns nil if no encrypted image is stored.
 func (cs *ClipboardStore) GetEncryptedImage() ([]byte, string) {
 	cs.mu.RLock()
 	defer cs.mu.RUnlock()
@@ -606,42 +641,4 @@ func (cs *ClipboardStore) GetEncryptedImage() ([]byte, string) {
 	result := make([]byte, len(cs.image.encrypted))
 	copy(result, cs.image.encrypted)
 	return result, cs.image.mimeType
-}
-
-// ClearEncryptedData shreds all encrypted blobs.
-// Called after client successfully decrypts and re-uploads plaintext data.
-func (cs *ClipboardStore) ClearEncryptedData() {
-	cs.mu.Lock()
-	defer cs.mu.Unlock()
-
-	// Only clear encrypted data, not plaintext SecureBuffer data
-	if cs.text != nil {
-		cs.text.mu.Lock()
-		if cs.text.encrypted != nil {
-			secure.Shred(cs.text.encrypted)
-			cs.text.encrypted = nil
-		}
-		// If no plaintext data either, remove the entry
-		if cs.text.data == nil {
-			cs.text.mu.Unlock()
-			cs.text = nil
-		} else {
-			cs.text.mu.Unlock()
-		}
-	}
-
-	if cs.image != nil {
-		cs.image.mu.Lock()
-		if cs.image.encrypted != nil {
-			secure.Shred(cs.image.encrypted)
-			cs.image.encrypted = nil
-		}
-		// If no plaintext data either, remove the entry
-		if cs.image.data == nil {
-			cs.image.mu.Unlock()
-			cs.image = nil
-		} else {
-			cs.image.mu.Unlock()
-		}
-	}
 }
