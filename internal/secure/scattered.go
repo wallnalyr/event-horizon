@@ -14,6 +14,49 @@ var ErrScatteredDestroyed = errors.New("scattered buffer has been destroyed")
 // DefaultChunkSize is the default size of each scattered chunk.
 const DefaultChunkSize = 256
 
+// MaxScatterChunks caps the number of chunks a single buffer is split into.
+//
+// Each chunk in the scatter+obfuscate path becomes its own ObfuscatedBuffer
+// with a dedicated rotation goroutine, ticker, and a full-size XOR pad. Without
+// an upper bound, a large payload (e.g. a 100MB upload at the default 256-byte
+// chunk size) would spawn hundreds of thousands of goroutines/timers and many
+// hundreds of MB of goroutine-stack overhead, exhausting CPU and RAM. Capping
+// the chunk count keeps that overhead bounded regardless of payload size; the
+// per-chunk size simply grows for larger payloads.
+const MaxScatterChunks = 64
+
+// boundedChunking returns a chunk size and chunk count for the given payload
+// that keeps at least 4 chunks (for scattering) where the payload allows, while
+// never exceeding MaxScatterChunks (to bound goroutine/timer/pad overhead).
+func boundedChunking(totalSize, requestedChunkSize int) (chunkSize, numChunks int) {
+	chunkSize = requestedChunkSize
+	if chunkSize <= 0 {
+		chunkSize = DefaultChunkSize
+	}
+
+	numChunks = (totalSize + chunkSize - 1) / chunkSize
+
+	// Force at least 4 chunks for better scattering on small payloads.
+	if numChunks < 4 {
+		chunkSize = (totalSize + 3) / 4
+		if chunkSize < 1 {
+			chunkSize = 1
+		}
+		numChunks = (totalSize + chunkSize - 1) / chunkSize
+	}
+
+	// Cap the chunk count for large payloads by growing the chunk size.
+	if numChunks > MaxScatterChunks {
+		chunkSize = (totalSize + MaxScatterChunks - 1) / MaxScatterChunks
+		if chunkSize < 1 {
+			chunkSize = 1
+		}
+		numChunks = (totalSize + chunkSize - 1) / chunkSize
+	}
+
+	return chunkSize, numChunks
+}
+
 // ScatteredBuffer splits data into chunks scattered across memory.
 // Each chunk is stored in a separately allocated slice, making it harder
 // for memory forensics to find and reassemble the original data.
@@ -53,16 +96,8 @@ func NewScatteredBufferWithChunkSize(data []byte, chunkSize int) (*ScatteredBuff
 
 	totalSize := len(data)
 
-	// Calculate number of chunks needed
-	numChunks := (totalSize + chunkSize - 1) / chunkSize
-	if numChunks < 4 {
-		// Force at least 4 chunks for better scattering
-		chunkSize = (totalSize + 3) / 4
-		if chunkSize < 1 {
-			chunkSize = 1
-		}
-		numChunks = (totalSize + chunkSize - 1) / chunkSize
-	}
+	// Calculate a bounded number of chunks (see boundedChunking / MaxScatterChunks).
+	chunkSize, numChunks := boundedChunking(totalSize, chunkSize)
 
 	// Create order array and shuffle it
 	// order[i] = original position of chunk that will be stored at index i

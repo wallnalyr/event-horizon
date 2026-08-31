@@ -23,9 +23,9 @@ A secure, ephemeral file sharing and clipboard sync app for your local network. 
 - **Multiple File Support** - Upload multiple files at once
 - **Wormhole** - Sync text between devices with a line-numbered editor
 - **Photon Capture** - Share images across devices via clipboard
-- **Session Sealing** - End-to-end encrypt your session with AES-256-GCM
-- **Singularity Disposal** - Files are securely overwritten using DoD 5220.22-M standard
-- **Accretion Disk Storage** - No files are written to disk, everything stays in secure memory
+- **Session Sealing** - End-to-end encrypt your session with AES-256-GCM (requires a secure context: HTTPS or `localhost`)
+- **Singularity Disposal** - At-rest buffers are multi-pass overwritten (zeros / ones / random / wipe) before release
+- **Accretion Disk Storage** - Nothing is persisted to disk; data lives in process memory only, obfuscated with a rotating XOR pad
 - **PWA Support** - Install as an app on mobile devices
 - **Auto-Expiry** - Files (24h) and clipboard (1h) automatically expire
 - **Graceful Collapse** - All data is securely shredded on server shutdown
@@ -149,15 +149,16 @@ Obfuscated:     [██] [██] [██] [██]  ← XOR'd with random pad
 
 | Protection | Description |
 |------------|-------------|
-| Scatter Storage | Data split into 4+ chunks (256 bytes each), stored in shuffled order |
-| XOR Obfuscation | Each chunk XOR'd with cryptographic random pad |
-| Pad Rotation | XOR pad regenerated every 100ms |
-| Tripwire | Monitors for debugger attachment every 50ms; triggers data destruction |
-| memguard | Underlying secure memory allocation with guard pages |
+| Scatter Storage | Data split into 4–64 chunks, stored in shuffled order. Chunk size grows with payload size so the chunk count (and its per-chunk goroutine/timer overhead) stays bounded. |
+| XOR Obfuscation | Each chunk XOR'd with a cryptographic random pad |
+| Pad Rotation | XOR pad regenerated every 100ms for small payloads; the interval scales up for large payloads to bound CPU/entropy cost |
+| Tripwire | Best-effort Linux check for a debugger/`ptrace` tracer; on detection it shreds data and exits. Not a defense against a determined operator with host access. |
+| memguard | Used for the process master key, decoy pool, and constant-time wipe. **Note:** file/clipboard payloads live in ordinary (GC) heap, *not* memguard guard pages — the XOR obfuscation is protection against casual memory inspection (`strings`/grep of a dump), not against a debugger, root `/proc/pid/mem`, or a coherent heap walk. |
 
-### Layer 4: Secure Deletion (DoD 5220.22-M)
+### Layer 4: Secure Deletion (multi-pass overwrite)
 
-When data is deleted, expired, or the server shuts down:
+When an at-rest buffer is deleted, expired, or the server shuts down, its backing
+array is overwritten in place before release:
 
 ```
 Pass 1: Overwrite with 0x00 (zeros)
@@ -165,6 +166,14 @@ Pass 2: Overwrite with 0xFF (ones)
 Pass 3: Overwrite with crypto/rand random bytes
 Pass 4: memguard.WipeBytes (constant-time zero)
 ```
+
+**Scope & honesty:** the multi-pass pattern is inspired by the (now-retired) DoD
+5220.22-M *disk* standard; for volatile RAM a single overwrite is equivalent, so
+treat the extra passes as belt-and-suspenders, not a magic guarantee. Overwrites
+reach the buffers held by the store, but **transient plaintext copies created by
+the HTTP layer** (multipart parse buffers, the download response copy, and the
+immutable Go strings produced when clipboard JSON is (de)serialized) are *not*
+wiped and persist in the heap until the allocator reuses the memory.
 
 ### Layer 5: Auto-Expiry
 
@@ -216,6 +225,8 @@ Content-Security-Policy: default-src 'self'; script-src 'self'; ...
 | **Password Strength Dependent** | E2EE security depends entirely on password strength. Weak passwords = weak encryption. |
 | **No Forward Secrecy** | If password is compromised, all data encrypted with it is compromised. |
 | **Timing Side Channels** | While keyHash comparison is constant-time, other operations may leak timing info. |
+| **Secure Context Required** | The Web Crypto API (`crypto.subtle`) and clipboard write are only available in a secure context. Session Sealing (E2EE) and the one-click Copy button therefore require HTTPS or access via `localhost`; over plain `http://<LAN-IP>` they will not function. Put the app behind a TLS reverse proxy for LAN use. |
+| **Shared Session, No Accounts** | A server instance is a single shared session with no per-user auth. Any device that can reach the port can read/replace unsealed data, and `force-unlock` intentionally wipes all data without a password. Cross-*site* attacks are blocked by same-origin validation, but the LAN itself is the trust boundary. |
 
 ### Operational Drawbacks
 
@@ -343,7 +354,7 @@ The frontend dev server runs on port 3000 and proxies API requests to the backen
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| `GET` | `/api/health` | Health check with memory stats |
+| `GET` | `/api/health` | Health check (`{"status":"ok"}`; append `?stats=true` for memory/session stats) |
 | `GET` | `/api/ping` | Simple ping |
 
 ---

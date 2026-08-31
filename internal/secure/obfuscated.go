@@ -15,6 +15,38 @@ var ErrObfuscatedDestroyed = errors.New("obfuscated buffer has been destroyed")
 // DefaultRotationInterval is the default interval for XOR pad rotation.
 const DefaultRotationInterval = 100 * time.Millisecond
 
+// maxRotationInterval bounds how slowly a pad may rotate, so even very large
+// buffers refresh their pad within a bounded window.
+const maxRotationInterval = 10 * time.Second
+
+// rotateThroughputBytesPerSec is the target ceiling on crypto/rand output spent
+// re-randomizing a buffer's pad. Rotation regenerates the whole payload each
+// tick; the interval is stretched for large payloads to keep total churn near
+// this rate instead of (payloadSize / baseInterval), which pins CPU cores.
+const rotateThroughputBytesPerSec = 8 * 1024 * 1024 // 8 MB/s
+
+// rotationIntervalFor returns a rotation interval no faster than base, stretched
+// for large payloads so pad re-randomization stays near rotateThroughputBytesPerSec.
+// Small secrets (clipboard text, keys) keep the fast base interval; a 60MB file
+// rotates on the order of seconds instead of every 100ms.
+func rotationIntervalFor(totalSize int, base time.Duration) time.Duration {
+	if base <= 0 {
+		base = DefaultRotationInterval
+	}
+	if totalSize <= 0 {
+		return base
+	}
+	// Time to emit totalSize bytes at the target throughput.
+	needed := time.Duration(float64(totalSize) / rotateThroughputBytesPerSec * float64(time.Second))
+	if needed < base {
+		return base
+	}
+	if needed > maxRotationInterval {
+		return maxRotationInterval
+	}
+	return needed
+}
+
 // ObfuscatedBuffer stores data XOR'd with a randomly rotating pad.
 // The pad rotates on a configurable interval, so an attacker doing memory
 // forensics has only a small window to capture both data and pad.
