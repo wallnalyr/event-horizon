@@ -1,14 +1,38 @@
 # Event Horizon
 
-File sharing and clipboard sync across the event horizon.
+Ephemeral file sharing and clipboard sync for your **home network**.
 
-A secure, ephemeral file sharing and clipboard sync app for your local network. Upload files from one device and download them on another. All data orbits in the accretion disk (memory) and can be sent to the singularity when no longer needed.
+Upload a file or copy some text on one device and grab it on another. Nothing is
+written to disk — data lives in memory only and auto-expires, or you can send it
+to the singularity (delete it) yourself. Optionally, seal a session with a
+password for real end-to-end encryption.
+
+## ⚠️ Security & Scope — Read This First
+
+Event Horizon is a **convenience tool for a trusted local network**, hardened to
+be reasonable — not a high-security vault.
+
+- **It is NOT 100% secure.** It reduces casual exposure; it does not defend
+  against a determined attacker who controls the server, the host, or your LAN.
+- **Do NOT expose it to the public internet.** There are no user accounts — a
+  single shared session is visible to anyone who can reach the port. Keep it
+  behind your router/firewall and bind it to your LAN only.
+- **For actual confidentiality, use Session Sealing (E2EE) over HTTPS.** Without
+  sealing, the server can read your data. Browser crypto (and the Copy button)
+  require a secure context, so E2EE only works over `https://` or `localhost` —
+  put the app behind a TLS reverse proxy for LAN use.
+- **Everything is ephemeral.** A restart, crash, or expiry loses your data by
+  design. There is no backup.
+
+See [Limitations & Drawbacks](#limitations--drawbacks) and
+[Threat Model](#threat-model) for the honest details of what is and isn't protected.
 
 ## Table of Contents
 
 - [Features](#features)
 - [How It Works](#how-it-works)
 - [Security Architecture](#security-architecture)
+- [Threat Model](#threat-model)
 - [Limitations & Drawbacks](#limitations--drawbacks)
 - [Quick Start](#quick-start)
 - [Environment Variables](#environment-variables)
@@ -26,7 +50,7 @@ A secure, ephemeral file sharing and clipboard sync app for your local network. 
 - **Session Sealing** - End-to-end encrypt your session with AES-256-GCM (requires a secure context: HTTPS or `localhost`)
 - **Singularity Disposal** - At-rest buffers are multi-pass overwritten (zeros / ones / random / wipe) before release
 - **Accretion Disk Storage** - Nothing is persisted to disk; data lives in process memory only, obfuscated with a rotating XOR pad
-- **PWA Support** - Install as an app on mobile devices
+- **Add to Home Screen** - Installable via a web manifest (no offline service worker)
 - **Auto-Expiry** - Files (24h) and clipboard (1h) automatically expire
 - **Graceful Collapse** - All data is securely shredded on server shutdown
 
@@ -39,29 +63,28 @@ A secure, ephemeral file sharing and clipboard sync app for your local network. 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
 │                         CLIENT (Browser)                            │
-│  • Optional E2EE: PBKDF2 key derivation → AES-256-GCM encryption    │
-│  • Password never leaves browser                                    │
-│  • Encryption key derived client-side, wiped after use              │
+│  • Optional E2EE (sealed): PBKDF2 → AES-256-GCM, client-side        │
+│  • Password never leaves the browser                                │
+│  • Key held in memory for the session (JS cannot guarantee a wipe)  │
 └─────────────────────────────────────────────────────────────────────┘
                                    │
-                         HTTPS (encrypted in transit)
+              HTTP by default (use an HTTPS reverse proxy for LAN)
                                    │
                                    ▼
 ┌─────────────────────────────────────────────────────────────────────┐
 │                      SECURITY MIDDLEWARE                            │
 │  • Rate limiting (600 req/min general, 20 req/min uploads)          │
-│  • Origin validation (CSRF protection)                              │
-│  • Security headers (CSP, HSTS, X-Frame-Options)                    │
+│  • Same-origin validation (CSRF protection)                         │
+│  • Request-body size limits                                         │
+│  • Security headers (CSP, X-Frame-Options, ...)                     │
 └─────────────────────────────────────────────────────────────────────┘
                                    │
                                    ▼
 ┌─────────────────────────────────────────────────────────────────────┐
-│                    SECURE MEMORY STORAGE                            │
-│  • FortifiedBuffer with scatter + XOR obfuscation + tripwire        │
-│  • Data split into 4+ chunks, stored in random order                │
-│  • XOR pad rotates every 100ms with crypto random                   │
-│  • Tripwire monitors for debuggers every 50ms                       │
-│  • Auto-expiry with secure shredding                                │
+│                       IN-MEMORY STORAGE                             │
+│  • Nothing written to disk; auto-expiry + multi-pass overwrite      │
+│  • Unsealed: plaintext in RAM, XOR-obfuscated (casual-dump defense) │
+│  • Sealed: only ciphertext + keyHash + salt are ever stored         │
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -119,11 +142,20 @@ When you seal the session with a password:
 
 ### Layer 2: Transport Security
 
-- HTTPS encryption in transit
-- Security headers prevent common web attacks
-- CORS and Origin validation for CSRF protection
+- **The server speaks plain HTTP by default.** For encryption in transit (and to
+  enable E2EE / the Copy button, which need a secure context) run it behind an
+  HTTPS reverse proxy or access it via `localhost`. The `Strict-Transport-Security`
+  header is sent but has no effect over HTTP.
+- Security headers (CSP, `X-Frame-Options: DENY`, `nosniff`, ...) prevent common web attacks
+- Same-origin validation on state-changing requests for CSRF protection
 
 ### Layer 3: Server Memory Protection (FortifiedBuffer)
+
+> **Reality check:** this layer is *obfuscation against casual inspection of a
+> memory dump*, not encryption at rest. The pad sits next to the data in the same
+> process heap, so anyone who can run a debugger, read `/proc/<pid>/mem`, or walk a
+> coherent dump can recover the plaintext. For real confidentiality, use Sealed
+> Mode (Layer 1).
 
 ```
 Original Data: [████████████████████████████████]
@@ -184,10 +216,15 @@ wiped and persist in the heap until the allocator reuses the memory.
 
 ### Layer 6: Rate Limiting
 
+Per-client, keyed on the peer address (`RemoteAddr`). Proxy headers
+(`X-Forwarded-For`) are ignored unless `TRUST_PROXY=true`, so a direct client
+cannot forge them; the visitor table is bounded to prevent memory growth.
+
 | Endpoint Type | Limit | Burst |
 |---------------|-------|-------|
 | General API | 600 req/min (10/sec) | 60 |
 | Upload | 20 req/min | 5 |
+| Auth (unlock / lock / force-unlock) | 10 req/min | 5 |
 
 ### Layer 7: Security Headers
 
@@ -372,30 +409,33 @@ The frontend dev server runs on port 3000 and proxies API requests to the backen
 
 ---
 
-## Security Summary
+## Threat Model
 
-```
-┌────────────────────────────────────────────────────────────────────────────┐
-│                          THREAT MODEL SUMMARY                               │
-├────────────────────────────────────────────────────────────────────────────┤
-│                                                                            │
-│  PROTECTED AGAINST:                     │  NOT PROTECTED AGAINST:          │
-│  ✓ Network eavesdropping (HTTPS)        │  ✗ Physical server access        │
-│  ✓ CSRF attacks (Origin validation)    │  ✗ Compromised browser/extensions│
-│  ✓ XSS (strict CSP)                     │  ✗ Weak passwords (user issue)   │
-│  ✓ Clickjacking (X-Frame-Options)       │  ✗ Server memory dump (advanced) │
-│  ✓ Brute force (rate limiting)          │  ✗ Nation-state level forensics  │
-│  ✓ Casual data recovery (4-pass shred)  │  ✗ Quantum computing (future)    │
-│  ✓ Basic memory forensics (obfuscation) │  ✗ Insider server access         │
-│  ✓ Debugger attachment (tripwire)       │                                  │
-│  ✓ Timing attacks on password verify    │                                  │
-│                                                                            │
-│  SEALED MODE ADDS:                                                         │
-│  ✓ Server cannot read your data                                            │
-│  ✓ Compromise requires password + ciphertext                               │
-│                                                                            │
-└────────────────────────────────────────────────────────────────────────────┘
-```
+Be realistic about what this buys you. Event Horizon assumes a **trusted LAN** and
+a **non-malicious server operator**; it is a convenience tool, not a vault.
+
+**Reasonably mitigated (on a trusted LAN):**
+
+- Cross-site requests from other websites — same-origin validation on state-changing endpoints
+- Clickjacking / MIME sniffing / basic web attacks — CSP and security headers
+- Request floods and password-guessing bursts — per-IP rate limiting (stricter on auth endpoints), body-size limits
+- Casual recovery of deleted data — multi-pass overwrite of at-rest buffers before release
+- `strings`/grep of a raw memory dump — unsealed data is XOR-obfuscated in RAM
+- Password verification timing — constant-time keyHash comparison
+
+**Sealed mode (E2EE) additionally protects against:**
+
+- An honest-but-curious or **later-compromised** server reading your data at rest — it only ever holds ciphertext, a salt, and a hash of your key. Requires HTTPS/secure context and a strong password.
+
+**NOT protected against (do not rely on it for these):**
+
+- **A server or host that is malicious right now.** It serves the app's JavaScript, so it could serve backdoored crypto and capture your password. E2EE here defends the data at rest, not against an actively hostile operator.
+- **Anyone with access to your LAN / the port.** No accounts; a single shared session. This is why you must not expose it to the internet.
+- **Physical access, root, a debugger, or a coherent memory/swap dump** of the host — unsealed data (and transient plaintext copies even in sealed mode) live in ordinary process memory. The XOR obfuscation and tripwire slow down casual inspection; they do not stop a determined attacker with host access.
+- **Weak passwords, compromised browsers/extensions, network eavesdropping over plain HTTP.** Use a strong password and HTTPS.
+
+If any of the "not protected" items are in your threat model, this app is not the
+right tool — see [What This Is NOT Suitable For](#what-this-is-not-suitable-for).
 
 ---
 

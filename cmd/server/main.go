@@ -19,21 +19,29 @@ import (
 )
 
 func main() {
-	// Initialize memguard (must be called before any other memguard operations)
-	memguard.CatchInterrupt()
-
-	// Ensure secure cleanup on exit
+	// Ensure secure cleanup on exit. We handle SIGINT/SIGTERM ourselves below
+	// (rather than memguard.CatchInterrupt) so that BOTH signals run the full
+	// graceful shutdown: drain HTTP, shred all data, then purge. Relying on
+	// memguard.CatchInterrupt would let it purge-and-exit on Ctrl+C before our
+	// data shred ran, leaving file/clipboard buffers in RAM.
 	defer memguard.Purge()
 
 	// Load configuration
 	cfg := config.LoadFromEnv()
 
-	log.Printf("FileEZ Server starting...")
-	log.Printf("  Port: %d", cfg.Port)
+	log.Printf("Event Horizon server starting...")
+	log.Printf("  Listen: %s", cfg.Addr())
 	log.Printf("  Max file size: %d MB", cfg.MaxFileSize/(1024*1024))
 	log.Printf("  Max memory: %d MB", cfg.MaxMemory/(1024*1024))
 	log.Printf("  File expiry: %s", cfg.FileExpiry)
 	log.Printf("  Clipboard expiry: %s", cfg.ClipboardExpiry)
+
+	// Safety nudge: this app is intended for trusted local networks only.
+	if cfg.Host == "0.0.0.0" || cfg.Host == "" || cfg.Host == "::" {
+		log.Printf("  [WARNING] Listening on all interfaces (%s). Event Horizon is for", cfg.Host)
+		log.Printf("            trusted LANs only — do NOT expose it to the public internet.")
+		log.Printf("            Restrict access with a firewall, and put it behind HTTPS for E2EE.")
+	}
 
 	// Initialize decoy pool (creates noise in memory to confuse forensics)
 	// 100 decoys ranging from 1KB to 512KB (~25MB average total)
