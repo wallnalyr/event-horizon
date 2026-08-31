@@ -29,9 +29,9 @@ func NewLockHandler(session *store.SessionManager, files *store.FileStore, clipb
 // Client derives key from password, encrypts data, and sends only keyHash for verification.
 type LockRequest struct {
 	// E2EE fields - client-side encryption
-	KeyHashB64  string `json:"keyHash_b64"`  // SHA-256 hash of derived key
-	SaltB64     string `json:"salt_b64"`     // PBKDF2 salt
-	ClearExisting bool `json:"clearExisting"` // If true, shred all data before locking
+	KeyHashB64    string `json:"keyHash_b64"`   // SHA-256 hash of derived key
+	SaltB64       string `json:"salt_b64"`      // PBKDF2 salt
+	ClearExisting bool   `json:"clearExisting"` // If true, shred all data before locking
 
 	// Encrypted data from client (server cannot decrypt)
 	EncryptedClipboardB64 string                    `json:"encryptedClipboard_b64,omitempty"`
@@ -45,7 +45,9 @@ type UnlockRequest struct {
 	KeyHashB64 string `json:"keyHash_b64"` // SHA-256 hash of derived key
 }
 
-// UnlockResponse contains encrypted data for client-side decryption.
+// UnlockResponse contains encrypted data for client-side decryption. Files are
+// returned as metadata-only (id + encrypted metadata blob); content ciphertext
+// is fetched lazily on download.
 type UnlockResponse struct {
 	Token                 string                    `json:"token"`
 	Locked                bool                      `json:"locked"`
@@ -53,7 +55,7 @@ type UnlockResponse struct {
 	EncryptedClipboardB64 string                    `json:"encryptedClipboard_b64,omitempty"`
 	EncryptedImageB64     string                    `json:"encryptedImage_b64,omitempty"`
 	ImageMimeType         string                    `json:"imageMimeType,omitempty"`
-	EncryptedFiles        []store.EncryptedFileInfo `json:"encryptedFiles,omitempty"`
+	EncryptedFiles        []store.EncryptedFileMeta `json:"encryptedFiles,omitempty"`
 }
 
 // LockStatusResponse is the response for lock status.
@@ -235,9 +237,9 @@ func (h *LockHandler) Unlock(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Get encrypted files
+	// Get encrypted file metadata (content fetched lazily on download)
 	if h.files != nil {
-		resp.EncryptedFiles = h.files.GetEncryptedFiles()
+		resp.EncryptedFiles = h.files.GetEncryptedFilesMeta()
 	}
 
 	// DO NOT unlock session - data stays encrypted on server

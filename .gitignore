@@ -8,6 +8,9 @@ dist/
 *.dll
 *.so
 *.dylib
+# Go build artifacts (e.g. `go build ./cmd/server` emits ./server)
+/server
+/fileez
 
 # Environment
 .env

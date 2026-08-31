@@ -61,6 +61,16 @@ export function generateSalt() {
 }
 
 /**
+ * Generate a random file ID as 16 lowercase hex characters (8 bytes).
+ * Matches the server's file-ID format so encrypted uploads validate.
+ * @returns {string} 16-character hex ID
+ */
+export function generateFileId() {
+  const bytes = crypto.getRandomValues(new Uint8Array(8))
+  return Array.from(bytes, b => b.toString(16).padStart(2, '0')).join('')
+}
+
+/**
  * Encrypt data using AES-256-GCM.
  * @param {Uint8Array} key - 256-bit encryption key
  * @param {Uint8Array} plaintext - Data to encrypt

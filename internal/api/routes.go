@@ -44,7 +44,13 @@ func NewRouter(s *Server) *chi.Mux {
 	rateLimiter := middleware.NewRateLimitMiddleware(middleware.RateLimitConfig{
 		GeneralLimit: s.Config.RateLimit,
 		UploadLimit:  s.Config.UploadRateLimit,
+		TrustProxy:   s.Config.TrustProxy,
 	})
+
+	// Bound request-body size on all /api routes. The cap accommodates a
+	// base64-encoded encrypted upload (~1.34x of MaxFileSize) plus JSON/multipart
+	// overhead, while preventing a single unbounded body from OOM-ing the process.
+	maxBody := s.Config.MaxFileSize*2 + (1 << 20)
 
 	// Session extraction (adds token to context if present)
 	r.Use(middleware.SessionExtractor)
@@ -66,6 +72,9 @@ func NewRouter(s *Server) *chi.Mux {
 
 	// API routes
 	r.Route("/api", func(r chi.Router) {
+		// Bound request body size before anything reads it.
+		r.Use(middleware.RequestSizeLimit(maxBody))
+
 		// Apply general rate limiting to API
 		r.Use(rateLimiter.General())
 
@@ -73,12 +82,17 @@ func NewRouter(s *Server) *chi.Mux {
 		r.Get("/health", healthHandler.Health)
 		r.Get("/ping", healthHandler.Ping)
 
-		// Lock/unlock endpoints
+		// Lock/unlock endpoints. The state-changing, destructive, and
+		// password-verifying ones get a stricter dedicated limiter on top of
+		// the general limit.
 		r.Get("/lock/status", lockHandler.Status)
 		r.Get("/lock/salt", lockHandler.GetSalt) // E2EE: Get salt for client-side key derivation
-		r.Post("/lock", lockHandler.Lock)
-		r.Post("/unlock", lockHandler.Unlock)
-		r.Post("/lock/force-unlock", lockHandler.ForceUnlock)
+		r.Group(func(r chi.Router) {
+			r.Use(rateLimiter.Auth())
+			r.Post("/lock", lockHandler.Lock)
+			r.Post("/unlock", lockHandler.Unlock)
+			r.Post("/lock/force-unlock", lockHandler.ForceUnlock)
+		})
 
 		// Protected data routes - require session token when locked
 		r.Group(func(r chi.Router) {

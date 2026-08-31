@@ -133,22 +133,21 @@ func NewFortifiedBufferWithOptions(data []byte, opts FortifiedOptions) (*Fortifi
 // initScatterObfuscate splits data into chunks in shuffled order, then obfuscates each chunk.
 // chunkOrder[i] = original position of the chunk stored at index i
 func (fb *FortifiedBuffer) initScatterObfuscate(data []byte, opts FortifiedOptions) error {
-	chunkSize := opts.ChunkSize
-	if chunkSize <= 0 {
-		chunkSize = DefaultChunkSize
-	}
-
 	totalSize := len(data)
 
-	// Calculate number of chunks
-	numChunks := (totalSize + chunkSize - 1) / chunkSize
-	if numChunks < 4 {
-		chunkSize = (totalSize + 3) / 4
-		if chunkSize < 1 {
-			chunkSize = 1
-		}
-		numChunks = (totalSize + chunkSize - 1) / chunkSize
-	}
+	// Calculate a bounded number of chunks. Each chunk becomes an
+	// ObfuscatedBuffer with its own rotation goroutine + ticker + pad, so the
+	// chunk count must be bounded regardless of payload size
+	// (see boundedChunking / MaxScatterChunks).
+	chunkSize, numChunks := boundedChunking(totalSize, opts.ChunkSize)
+
+	// Scale the rotation interval so total re-randomization work is bounded.
+	// Rotation re-XORs (and re-generates) the whole payload every interval; at a
+	// fixed 100ms that is 10x the payload size per second in crypto/rand output,
+	// which pins CPU for large payloads. rotationIntervalFor keeps throughput
+	// bounded while preserving the fast interval for small secrets.
+	rotOpts := opts
+	rotOpts.RotationInterval = rotationIntervalFor(totalSize, opts.RotationInterval)
 
 	// Store chunkSize for reassembly
 	fb.chunkSize = chunkSize
@@ -185,7 +184,7 @@ func (fb *FortifiedBuffer) initScatterObfuscate(data []byte, opts FortifiedOptio
 			chunkData = []byte{0}
 		}
 
-		ob, err := NewObfuscatedBufferWithInterval(chunkData, opts.RotationInterval)
+		ob, err := NewObfuscatedBufferWithInterval(chunkData, rotOpts.RotationInterval)
 		if err != nil {
 			// Cleanup already created chunks
 			for j := 0; j < i; j++ {

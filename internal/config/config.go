@@ -4,6 +4,7 @@ package config
 import (
 	"os"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -17,14 +18,22 @@ type Config struct {
 	ShutdownTimeout time.Duration
 
 	// Security settings
-	MaxFileSize        int64         // Maximum file size in bytes
-	MaxMemory          int64         // Maximum secure memory in bytes
-	FileExpiry         time.Duration // Time until files auto-expire
-	ClipboardExpiry    time.Duration // Time until clipboard auto-expires
-	RateLimit          int           // Requests per minute (general)
-	UploadRateLimit    int           // Requests per minute (uploads)
-	EnableCORS         bool          // Enable CORS headers
-	AllowedOrigins     []string      // CORS allowed origins
+	MaxFileSize     int64         // Maximum file size in bytes
+	MaxMemory       int64         // Maximum secure memory in bytes
+	FileExpiry      time.Duration // Time until files auto-expire
+	ClipboardExpiry time.Duration // Time until clipboard auto-expires
+	RateLimit       int           // Requests per minute (general)
+	UploadRateLimit int           // Requests per minute (uploads)
+	EnableCORS      bool          // Enable CORS headers
+	AllowedOrigins  []string      // CORS allowed origins
+	TrustProxy      bool          // Honor X-Forwarded-For / X-Real-IP for client IP
+
+	// TLS: serving over HTTPS provides a secure context so E2EE (Web Crypto) and
+	// the Copy button work over the LAN. If enabled with no cert/key files, the
+	// server generates a self-signed certificate on startup.
+	TLSEnabled  bool
+	TLSCertFile string
+	TLSKeyFile  string
 
 	// Feature flags
 	EnableClipboard      bool
@@ -46,14 +55,14 @@ func DefaultConfig() *Config {
 		ShutdownTimeout: 30 * time.Second,
 
 		// Security
-		MaxFileSize:      100 * 1024 * 1024, // 100MB
-		MaxMemory:        512 * 1024 * 1024, // 512MB
-		FileExpiry:       24 * time.Hour,
-		ClipboardExpiry:  1 * time.Hour,
-		RateLimit:        600,  // 600/min = 10/sec
-		UploadRateLimit:  20,   // 20/min
-		EnableCORS:       true,
-		AllowedOrigins:   []string{"*"}, // Restricted in production
+		MaxFileSize:     100 * 1024 * 1024, // 100MB
+		MaxMemory:       512 * 1024 * 1024, // 512MB
+		FileExpiry:      24 * time.Hour,
+		ClipboardExpiry: 1 * time.Hour,
+		RateLimit:       600, // 600/min = 10/sec
+		UploadRateLimit: 20,  // 20/min
+		EnableCORS:      true,
+		AllowedOrigins:  []string{"*"}, // Restricted in production
 
 		// Features
 		EnableClipboard:      true,
@@ -141,7 +150,34 @@ func LoadFromEnv() *Config {
 	}
 
 	if v := os.Getenv("ALLOWED_ORIGINS"); v != "" {
-		cfg.AllowedOrigins = []string{v}
+		// Support a comma-separated list of origins, e.g. "https://a.lan,https://b.lan".
+		var origins []string
+		for _, o := range strings.Split(v, ",") {
+			if o = strings.TrimSpace(o); o != "" {
+				origins = append(origins, o)
+			}
+		}
+		if len(origins) > 0 {
+			cfg.AllowedOrigins = origins
+		}
+	}
+
+	// TRUST_PROXY controls whether X-Forwarded-For / X-Real-IP are honored when
+	// determining the client IP for rate limiting. Off by default: the documented
+	// deployment exposes the port directly, where those headers are attacker-controlled.
+	if v := os.Getenv("TRUST_PROXY"); v != "" {
+		cfg.TrustProxy = v == "true" || v == "1" || v == "yes"
+	}
+
+	// TLS settings.
+	if v := os.Getenv("TLS_ENABLED"); v != "" {
+		cfg.TLSEnabled = v == "true" || v == "1" || v == "yes"
+	}
+	if v := os.Getenv("TLS_CERT_FILE"); v != "" {
+		cfg.TLSCertFile = v
+	}
+	if v := os.Getenv("TLS_KEY_FILE"); v != "" {
+		cfg.TLSKeyFile = v
 	}
 
 	// Feature flags

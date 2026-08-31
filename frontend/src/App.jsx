@@ -64,6 +64,13 @@ function App() {
     encryptionKeyRef.current = encryptionKey
   }, [encryptionKey])
 
+  // Mirror files into a ref so polling can preserve already-decrypted content
+  // (localDecryptedData) across refreshes without re-fetching/re-decrypting.
+  const filesRef = useRef([])
+  useEffect(() => {
+    filesRef.current = files
+  }, [files])
+
   // Helper to get headers with session token
   const getHeaders = (contentType = null) => {
     const headers = {}
@@ -120,8 +127,17 @@ function App() {
         if (prevLockedRef.current !== lockStatus) {
           // Lock state changed from another device
           if (!lockStatus && prevLockedRef.current === true) {
-            // Session was unlocked by another device - notify user and refresh data
-            toast.success('Session unsealed from another device')
+            // Session was unsealed by another device. Our E2EE key is now stale:
+            // the server no longer accepts encrypted writes, so wipe the key and
+            // stop encrypting to avoid corrupting/clobbering data.
+            if (encryptionKeyRef.current) {
+              crypto.wipe(encryptionKeyRef.current)
+            }
+            encryptionKeyRef.current = null
+            setEncryptionKey(null)
+            setSessionToken(null)
+            sessionStorage.removeItem('session-token')
+            toast.success('Session unsealed from another device — encryption is now off')
             await Promise.all([fetchFiles(), fetchClipboard(), fetchClipboardImage()])
           } else if (lockStatus && prevLockedRef.current === false) {
             // Session was locked by another device - notify user
@@ -179,22 +195,27 @@ function App() {
       if (Array.isArray(data)) {
         let processedFiles = data
 
-        // If we have encryption key and files are encrypted, decrypt them
-        if (encryptionKeyRef.current && data.length > 0 && data[0].encrypted_b64) {
+        // Sealed mode: the list is metadata-only. Decrypt the small metadata blob
+        // for each file (name/mimetype/size); content is fetched lazily on
+        // download. Preserve any content we already decrypted this session so we
+        // never re-download or re-decrypt file bodies on every poll.
+        if (encryptionKeyRef.current && data.length > 0 && data[0].encryptedMeta_b64) {
+          const prevById = new Map((filesRef.current || []).map(f => [f.id, f]))
           const decryptedFiles = []
           for (const file of data) {
             try {
-              const encryptedData = crypto.fromBase64(file.encrypted_b64)
-              const fileBytes = await crypto.decrypt(encryptionKeyRef.current, encryptedData)
+              const metaJson = await crypto.decryptText(encryptionKeyRef.current, crypto.fromBase64(file.encryptedMeta_b64))
+              const meta = JSON.parse(metaJson)
               decryptedFiles.push({
                 id: file.id,
-                name: file.name,
-                mimetype: file.mimetype,
-                size: file.size,
-                localDecryptedData: fileBytes
+                name: meta.name,
+                mimetype: meta.mimetype,
+                size: meta.size,
+                uploadedAt: file.uploadedAt,
+                localDecryptedData: prevById.get(file.id)?.localDecryptedData
               })
             } catch (err) {
-              console.error(`Failed to decrypt file ${file.name}:`, err)
+              console.error('Failed to decrypt file metadata:', err)
             }
           }
           processedFiles = decryptedFiles
@@ -358,12 +379,13 @@ function App() {
 
         if (!response.ok) {
           console.error(`Clipboard save failed: ${response.status} ${response.statusText}`)
-          toast.error('Failed to save clipboard')
-          setClipboardSynced(true) // Reset indicator so it doesn't stay stuck at "Saving..."
-          // Set cooldown to prevent immediate overwrite
-          clipboardCooldownRef.current = setTimeout(() => {
-            clipboardSyncedRef.current = true
-          }, 2000)
+          toast.error('Failed to save clipboard — your text is kept locally')
+          // Protect the user's text: the poll-guard is the REF, not the display
+          // flag. Keep the ref false so the 2s poll can't overwrite unsaved
+          // text, but clear the "Saving..." badge (the error toast already
+          // reported the failure) so it doesn't imply an in-progress save.
+          clipboardSyncedRef.current = false
+          setClipboardSynced(true)
           return
         }
 
@@ -379,12 +401,12 @@ function App() {
         }, 2000)
       } catch (err) {
         console.error('Failed to save clipboard:', err)
-        toast.error('Failed to save clipboard')
-        setClipboardSynced(true) // Reset indicator so it doesn't stay stuck at "Saving..."
-        // Still set cooldown to prevent immediate overwrite of local changes
-        clipboardCooldownRef.current = setTimeout(() => {
-          clipboardSyncedRef.current = true
-        }, 2000)
+        toast.error('Failed to save clipboard — your text is kept locally')
+        // Keep the poll-guard ref false so a background poll cannot revert the
+        // user's typed text; clear the "Saving..." badge (toast already
+        // reported it). Retries on the next edit.
+        clipboardSyncedRef.current = false
+        setClipboardSynced(true)
       }
     }, 500)
   }
@@ -476,21 +498,23 @@ function App() {
           // Read file as bytes
           const fileBytes = new Uint8Array(await file.arrayBuffer())
 
-          // Encrypt the file
+          // Encrypt the file content and its metadata (name/mimetype/size)
           const encryptedData = await crypto.encrypt(encryptionKeyRef.current, fileBytes)
+          const encryptedMeta = await crypto.encryptText(
+            encryptionKeyRef.current,
+            JSON.stringify({ name: file.name, mimetype: file.type || 'application/octet-stream', size: file.size })
+          )
 
-          // Generate a unique ID for the file
-          const fileId = `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
+          // Generate a valid (16-hex) file ID the server will accept
+          const fileId = crypto.generateFileId()
 
-          // Send encrypted file data to server
+          // Send encrypted content + encrypted metadata to server (server cannot decrypt either)
           const response = await fetchWithTimeout('/api/upload/encrypted', {
             method: 'POST',
             headers: getHeaders('application/json'),
             body: JSON.stringify({
               id: fileId,
-              name: file.name,
-              mimetype: file.type || 'application/octet-stream',
-              size: file.size,
+              encryptedMeta_b64: crypto.toBase64(encryptedMeta),
               encrypted_b64: crypto.toBase64(encryptedData)
             })
           }, 120000)
@@ -504,6 +528,7 @@ function App() {
             name: file.name,
             mimetype: file.type || 'application/octet-stream',
             size: file.size,
+            uploadedAt: new Date().toISOString(),
             localDecryptedData: fileBytes
           })
         } else {
@@ -565,12 +590,22 @@ function App() {
     try {
       let blob
 
-      // E2EE: If file has locally decrypted data (session was unlocked locally), use that
+      // E2EE: If file has locally decrypted data (uploaded/unlocked this session), use it
       if (file.localDecryptedData) {
         // localDecryptedData is a Uint8Array of decrypted bytes
         blob = new Blob([file.localDecryptedData], { type: file.mimetype || 'application/octet-stream' })
+      } else if (encryptionKeyRef.current) {
+        // Sealed file not yet decrypted this session: fetch the ciphertext and
+        // decrypt on demand (we no longer decrypt file bodies on every poll).
+        const response = await fetchWithTimeout(`/api/files/${file.id}/download`, {
+          headers: getHeaders()
+        }, 120000)
+        if (!response.ok) throw new Error('Download failed')
+        const cipher = new Uint8Array(await response.arrayBuffer())
+        const plain = await crypto.decrypt(encryptionKeyRef.current, cipher)
+        blob = new Blob([plain], { type: file.mimetype || 'application/octet-stream' })
       } else {
-        // Normal mode: fetch from server
+        // Normal mode: fetch plaintext from server
         const response = await fetchWithTimeout(`/api/files/${file.id}/download`, {
           headers: getHeaders()
         }, 120000) // 2 min timeout for downloads
@@ -628,43 +663,43 @@ function App() {
           encryptedClipboard = await crypto.encryptText(key, clipboardText)
         }
 
-        // Encrypt clipboard image
+        // Encrypt clipboard image. If we cannot read and encrypt it, ABORT the
+        // whole seal: the server shreds any plaintext not covered by the
+        // encrypted payload, so a silent skip here would destroy the only copy.
         if (clipboardImageData?.hasImage) {
-          try {
-            const imageResponse = await fetchWithTimeout('/api/clipboard-image/data', {
-              headers: getHeaders()
-            })
-            if (imageResponse.ok) {
-              const imageBlob = await imageResponse.blob()
-              const imageBytes = new Uint8Array(await imageBlob.arrayBuffer())
-              encryptedImage = await crypto.encrypt(key, imageBytes)
-            }
-          } catch (err) {
-            console.warn('Failed to encrypt clipboard image:', err)
+          const imageResponse = await fetchWithTimeout('/api/clipboard-image/data', {
+            headers: getHeaders()
+          }, 120000)
+          if (!imageResponse.ok) {
+            throw new Error('Could not read the clipboard image to encrypt it. Session NOT sealed — your data is preserved; please try again.')
           }
+          const imageBlob = await imageResponse.blob()
+          const imageBytes = new Uint8Array(await imageBlob.arrayBuffer())
+          encryptedImage = await crypto.encrypt(key, imageBytes)
         }
 
-        // Encrypt files
+        // Encrypt files. Same rule: if any file cannot be re-downloaded and
+        // encrypted, abort so the server does not shred plaintext we failed to
+        // carry over into the sealed set.
         for (const file of files) {
-          try {
-            const fileResponse = await fetchWithTimeout(`/api/files/${file.id}/download`, {
-              headers: getHeaders()
-            })
-            if (fileResponse.ok) {
-              const fileBlob = await fileResponse.blob()
-              const fileBytes = new Uint8Array(await fileBlob.arrayBuffer())
-              const encryptedData = await crypto.encrypt(key, fileBytes)
-              encryptedFiles.push({
-                id: file.id,
-                name: file.name,
-                mimetype: file.mimetype,
-                size: file.size,
-                encrypted_b64: crypto.toBase64(encryptedData)
-              })
-            }
-          } catch (err) {
-            console.warn(`Failed to encrypt file ${file.name}:`, err)
+          const fileResponse = await fetchWithTimeout(`/api/files/${file.id}/download`, {
+            headers: getHeaders()
+          }, 120000)
+          if (!fileResponse.ok) {
+            throw new Error(`Could not read "${file.name}" to encrypt it. Session NOT sealed — your data is preserved; please try again.`)
           }
+          const fileBlob = await fileResponse.blob()
+          const fileBytes = new Uint8Array(await fileBlob.arrayBuffer())
+          const encryptedData = await crypto.encrypt(key, fileBytes)
+          const encryptedMeta = await crypto.encryptText(
+            key,
+            JSON.stringify({ name: file.name, mimetype: file.mimetype, size: file.size })
+          )
+          encryptedFiles.push({
+            id: file.id,
+            encryptedMeta_b64: crypto.toBase64(encryptedMeta),
+            encrypted_b64: crypto.toBase64(encryptedData)
+          })
         }
       }
 
@@ -761,16 +796,18 @@ function App() {
       setSessionToken(newToken)
       sessionStorage.setItem('session-token', newToken)
 
-      // 5. Store encryption key in memory for future decrypt/encrypt operations
-      // This key NEVER leaves the client
+      // 5. Store encryption key in memory for future decrypt/encrypt operations.
+      // Keep a local reference for decrypting below: the ref only syncs after the
+      // next render, so using it here would trigger an expensive PBKDF2
+      // re-derivation per item. This key NEVER leaves the client.
+      const activeKey = key
       setEncryptionKey(key)
       key = null // Prevent cleanup from wiping our stored key
 
       // 6. Decrypt clipboard text locally (DO NOT send back to server!)
       if (data.encryptedClipboard_b64) {
         try {
-          const encryptedClipboard = crypto.fromBase64(data.encryptedClipboard_b64)
-          const text = await crypto.decryptText(encryptionKeyRef.current || await crypto.deriveKey(password, salt), encryptedClipboard)
+          const text = await crypto.decryptText(activeKey, crypto.fromBase64(data.encryptedClipboard_b64))
           setClipboardText(text)
         } catch (err) {
           console.error('Failed to decrypt clipboard:', err)
@@ -780,36 +817,32 @@ function App() {
       // 7. Decrypt clipboard image locally (DO NOT send back to server!)
       if (data.encryptedImage_b64) {
         try {
-          const encryptedImage = crypto.fromBase64(data.encryptedImage_b64)
-          const imageBytes = await crypto.decrypt(encryptionKeyRef.current || await crypto.deriveKey(password, salt), encryptedImage)
-          // Store decrypted image data locally for display
-          const base64Image = crypto.toBase64(imageBytes)
+          const imageBytes = await crypto.decrypt(activeKey, crypto.fromBase64(data.encryptedImage_b64))
           setClipboardImageData({
             hasImage: true,
             mimeType: data.imageMimeType || 'image/png',
-            localDecryptedData: base64Image // Local only, never sent to server
+            localDecryptedData: crypto.toBase64(imageBytes) // Local only, never sent to server
           })
         } catch (err) {
           console.error('Failed to decrypt clipboard image:', err)
         }
       }
 
-      // 8. Decrypt files locally (DO NOT send back to server!)
+      // 8. Decrypt file metadata locally; content is fetched lazily on download.
       if (data.encryptedFiles && data.encryptedFiles.length > 0) {
         const decryptedFiles = []
         for (const encFile of data.encryptedFiles) {
           try {
-            const encryptedData = crypto.fromBase64(encFile.encrypted_b64)
-            const fileBytes = await crypto.decrypt(encryptionKeyRef.current || await crypto.deriveKey(password, salt), encryptedData)
+            const meta = JSON.parse(await crypto.decryptText(activeKey, crypto.fromBase64(encFile.encryptedMeta_b64)))
             decryptedFiles.push({
               id: encFile.id,
-              name: encFile.name,
-              mimetype: encFile.mimetype,
-              size: encFile.size,
-              localDecryptedData: fileBytes // Local only, never sent to server
+              name: meta.name,
+              mimetype: meta.mimetype,
+              size: meta.size,
+              uploadedAt: encFile.uploadedAt
             })
           } catch (err) {
-            console.error(`Failed to decrypt file ${encFile.name}:`, err)
+            console.error('Failed to decrypt file metadata:', err)
           }
         }
         setFiles(decryptedFiles)
@@ -950,7 +983,7 @@ function App() {
         </header>
 
         {/* Security Banner */}
-        <SecurityBanner isLocked={isLocked} />
+        <SecurityBanner isLocked={isLocked} onSeal={() => setShowLockModal(true)} />
 
         <main id="main-content" className="max-w-3xl mx-auto px-4 px-safe py-6 space-y-6">
           {showLockedOverlay ? (

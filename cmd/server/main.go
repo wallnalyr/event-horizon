@@ -3,6 +3,7 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"log"
 	"net/http"
 	"os"
@@ -19,21 +20,29 @@ import (
 )
 
 func main() {
-	// Initialize memguard (must be called before any other memguard operations)
-	memguard.CatchInterrupt()
-
-	// Ensure secure cleanup on exit
+	// Ensure secure cleanup on exit. We handle SIGINT/SIGTERM ourselves below
+	// (rather than memguard.CatchInterrupt) so that BOTH signals run the full
+	// graceful shutdown: drain HTTP, shred all data, then purge. Relying on
+	// memguard.CatchInterrupt would let it purge-and-exit on Ctrl+C before our
+	// data shred ran, leaving file/clipboard buffers in RAM.
 	defer memguard.Purge()
 
 	// Load configuration
 	cfg := config.LoadFromEnv()
 
-	log.Printf("FileEZ Server starting...")
-	log.Printf("  Port: %d", cfg.Port)
+	log.Printf("Event Horizon server starting...")
+	log.Printf("  Listen: %s", cfg.Addr())
 	log.Printf("  Max file size: %d MB", cfg.MaxFileSize/(1024*1024))
 	log.Printf("  Max memory: %d MB", cfg.MaxMemory/(1024*1024))
 	log.Printf("  File expiry: %s", cfg.FileExpiry)
 	log.Printf("  Clipboard expiry: %s", cfg.ClipboardExpiry)
+
+	// Safety nudge: this app is intended for trusted local networks only.
+	if cfg.Host == "0.0.0.0" || cfg.Host == "" || cfg.Host == "::" {
+		log.Printf("  [WARNING] Listening on all interfaces (%s). Event Horizon is for", cfg.Host)
+		log.Printf("            trusted LANs only — do NOT expose it to the public internet.")
+		log.Printf("            Restrict access with a firewall, and put it behind HTTPS for E2EE.")
+	}
 
 	// Initialize decoy pool (creates noise in memory to confuse forensics)
 	// 100 decoys ranging from 1KB to 512KB (~25MB average total)
@@ -97,9 +106,37 @@ func main() {
 	shutdown := make(chan os.Signal, 1)
 	signal.Notify(shutdown, os.Interrupt, syscall.SIGTERM)
 
-	// Start server in goroutine
+	// Start server in goroutine (HTTPS when TLS is enabled).
 	go func() {
-		log.Printf("Server listening on %s", cfg.Addr())
+		if cfg.TLSEnabled {
+			if (cfg.TLSCertFile == "") != (cfg.TLSKeyFile == "") {
+				log.Fatalf("TLS_CERT_FILE and TLS_KEY_FILE must both be set, or both empty (for a self-signed cert)")
+			}
+			if cfg.TLSCertFile != "" && cfg.TLSKeyFile != "" {
+				log.Printf("Server listening on https://%s (cert: %s)", cfg.Addr(), cfg.TLSCertFile)
+				if err := httpServer.ListenAndServeTLS(cfg.TLSCertFile, cfg.TLSKeyFile); err != nil && err != http.ErrServerClosed {
+					log.Fatalf("Server error: %v", err)
+				}
+				return
+			}
+			// No cert/key provided: generate a self-signed certificate.
+			cert, err := selfSignedCert()
+			if err != nil {
+				log.Fatalf("Failed to generate self-signed certificate: %v", err)
+			}
+			httpServer.TLSConfig = &tls.Config{
+				Certificates: []tls.Certificate{cert},
+				MinVersion:   tls.VersionTLS12,
+			}
+			log.Printf("Server listening on https://%s (self-signed certificate)", cfg.Addr())
+			log.Printf("  Your browser will warn about the self-signed cert; accept it to enable E2EE.")
+			if err := httpServer.ListenAndServeTLS("", ""); err != nil && err != http.ErrServerClosed {
+				log.Fatalf("Server error: %v", err)
+			}
+			return
+		}
+
+		log.Printf("Server listening on http://%s", cfg.Addr())
 		if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("Server error: %v", err)
 		}

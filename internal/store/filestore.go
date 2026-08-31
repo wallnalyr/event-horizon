@@ -23,6 +23,12 @@ var (
 	ErrStorageFull = errors.New("storage full")
 )
 
+// plaintextFootprintFactor approximates the real memory footprint of a plaintext
+// file stored in a FortifiedBuffer relative to its logical size: the rotating XOR
+// pad duplicates the bytes (~2x), plus small per-chunk overhead. Accounting this
+// keeps MAX_MEMORY a meaningful bound instead of counting only logical bytes.
+const plaintextFootprintFactor = 2
+
 // StoredFile represents a file stored in memory.
 type StoredFile struct {
 	mu sync.RWMutex
@@ -32,9 +38,17 @@ type StoredFile struct {
 
 	// Content (either plaintext or encrypted)
 	data      *secure.FortifiedBuffer // Plaintext when unlocked (with memory obfuscation)
-	encrypted []byte                  // Ciphertext when locked
+	encrypted []byte                  // Content ciphertext when locked (E2EE)
 
-	// Metadata
+	// encryptedMeta is the client-encrypted metadata blob (name/mimetype/size)
+	// for sealed files. The server never sees the plaintext metadata.
+	encryptedMeta []byte
+
+	// allocated is the exact number of bytes reserved from the MemoryTracker for
+	// this file, so shredFile frees exactly what was allocated (no over/under-free).
+	allocated int64
+
+	// Metadata (plaintext only; empty for sealed files whose metadata is encrypted)
 	Filename  string
 	MimeType  string
 	Size      int64
@@ -110,9 +124,10 @@ func (fs *FileStore) Store(filename string, mimeType string, content []byte) (st
 		return "", ErrFileTooLarge
 	}
 
-	// Check memory limit
+	// Check memory limit against the real footprint (data + rotating XOR pad).
+	footprint := contentLen * plaintextFootprintFactor
 	if fs.memory != nil {
-		if err := fs.memory.Allocate(contentLen); err != nil {
+		if err := fs.memory.Allocate(footprint); err != nil {
 			return "", ErrStorageFull
 		}
 	}
@@ -121,7 +136,7 @@ func (fs *FileStore) Store(filename string, mimeType string, content []byte) (st
 	id, err := crypto.GenerateFileID()
 	if err != nil {
 		if fs.memory != nil {
-			fs.memory.Free(contentLen)
+			fs.memory.Free(footprint)
 		}
 		return "", err
 	}
@@ -133,7 +148,7 @@ func (fs *FileStore) Store(filename string, mimeType string, content []byte) (st
 	buf, err := secure.NewFortifiedBuffer(content)
 	if err != nil {
 		if fs.memory != nil {
-			fs.memory.Free(contentLen)
+			fs.memory.Free(footprint)
 		}
 		return "", err
 	}
@@ -141,6 +156,7 @@ func (fs *FileStore) Store(filename string, mimeType string, content []byte) (st
 	file := &StoredFile{
 		ID:        id,
 		data:      buf,
+		allocated: footprint,
 		Filename:  filename,
 		MimeType:  mimeType,
 		Size:      int64(buf.Size()),
@@ -157,7 +173,7 @@ func (fs *FileStore) Store(filename string, mimeType string, content []byte) (st
 
 // Get retrieves a file by ID (plaintext from SecureBuffer).
 // E2EE: This is only called when session is unlocked. When locked, encrypted
-// blobs are retrieved via GetEncryptedFiles.
+// metadata is retrieved via GetEncryptedFilesMeta and content via GetEncryptedContent.
 func (fs *FileStore) Get(id string) (*StoredFile, []byte, error) {
 	// Validate ID
 	id, err := validate.FileID(id)
@@ -304,9 +320,10 @@ func (fs *FileStore) shredFile(file *StoredFile) {
 	file.mu.Lock()
 	defer file.mu.Unlock()
 
-	// Free memory
-	if fs.memory != nil {
-		fs.memory.Free(file.Size)
+	// Free exactly what was allocated for this file (0 if never tracked).
+	if fs.memory != nil && file.allocated > 0 {
+		fs.memory.Free(file.allocated)
+		file.allocated = 0
 	}
 
 	// Shred data (FortifiedBuffer handles its own secure destruction)
@@ -318,6 +335,11 @@ func (fs *FileStore) shredFile(file *StoredFile) {
 	if file.encrypted != nil {
 		secure.Shred(file.encrypted)
 		file.encrypted = nil
+	}
+
+	if file.encryptedMeta != nil {
+		secure.Shred(file.encryptedMeta)
+		file.encryptedMeta = nil
 	}
 }
 
@@ -413,13 +435,60 @@ func (fs *FileStore) Stats() FileStoreStats {
 	}
 }
 
-// EncryptedFileInfo contains file metadata and encrypted data for E2EE.
+// EncryptedFileInfo is a sealed file submitted by the client (lock / encrypted
+// upload). Both the content AND the metadata (name/mimetype/size) are encrypted
+// client-side; the server stores them opaquely and can decrypt neither.
 type EncryptedFileInfo struct {
-	ID          string `json:"id"`
-	Name        string `json:"name"`
-	MimeType    string `json:"mimetype"`
-	Size        int64  `json:"size"`
-	EncryptedB64 string `json:"encrypted_b64"`
+	ID               string `json:"id"`
+	EncryptedMetaB64 string `json:"encryptedMeta_b64"` // AES-GCM of {name, mimetype, size}
+	EncryptedB64     string `json:"encrypted_b64"`     // AES-GCM of file content
+}
+
+// EncryptedFileMeta is returned to the client for listing sealed files. It never
+// includes the content ciphertext (fetched lazily on download), so a poll does
+// not re-transfer or force re-decryption of every file's contents.
+type EncryptedFileMeta struct {
+	ID               string `json:"id"`
+	EncryptedMetaB64 string `json:"encryptedMeta_b64"`
+	UploadedAt       string `json:"uploadedAt,omitempty"`
+	ExpiresAt        string `json:"expiresAt,omitempty"`
+}
+
+// storeEncryptedLocked stores one sealed file (caller holds fs.mu). Returns false
+// if the blobs are undecodable or memory cannot be reserved.
+func (fs *FileStore) storeEncryptedLocked(f EncryptedFileInfo, now time.Time) bool {
+	content, err := base64.StdEncoding.DecodeString(f.EncryptedB64)
+	if err != nil {
+		return false
+	}
+	meta, err := base64.StdEncoding.DecodeString(f.EncryptedMetaB64)
+	if err != nil {
+		return false
+	}
+
+	footprint := int64(len(content) + len(meta))
+	if fs.memory != nil {
+		if err := fs.memory.Allocate(footprint); err != nil {
+			return false
+		}
+	}
+
+	// If an entry with this ID already exists, shred it first so its memory is
+	// freed and its ciphertext wiped (no accounting leak on client-chosen IDs).
+	if existing, ok := fs.files[f.ID]; ok {
+		fs.shredFile(existing)
+	}
+
+	fs.files[f.ID] = &StoredFile{
+		ID:            f.ID,
+		encrypted:     content,
+		encryptedMeta: meta,
+		allocated:     footprint,
+		Size:          int64(len(content)),
+		CreatedAt:     now,
+		ExpiresAt:     now.Add(fs.expiry),
+	}
+	return true
 }
 
 // SetEncryptedFiles stores already-encrypted file blobs from the client.
@@ -435,64 +504,37 @@ func (fs *FileStore) SetEncryptedFiles(files []EncryptedFileInfo) {
 		delete(fs.files, id)
 	}
 
-	// Store encrypted blobs
 	now := time.Now()
 	for _, f := range files {
-		encrypted, err := base64.StdEncoding.DecodeString(f.EncryptedB64)
-		if err != nil {
-			continue
-		}
-
-		fs.files[f.ID] = &StoredFile{
-			ID:        f.ID,
-			encrypted: encrypted,
-			Filename:  f.Name,
-			MimeType:  f.MimeType,
-			Size:      f.Size,
-			CreatedAt: now,
-			ExpiresAt: now.Add(fs.expiry),
-		}
+		fs.storeEncryptedLocked(f, now)
 	}
 }
 
 // AddEncryptedFile adds a single encrypted file to the store.
 // Used for E2EE uploads when session is locked - client encrypts locally.
-func (fs *FileStore) AddEncryptedFile(f EncryptedFileInfo) {
+// Returns false if the file could not be stored (bad blobs or out of memory).
+func (fs *FileStore) AddEncryptedFile(f EncryptedFileInfo) bool {
 	fs.mu.Lock()
 	defer fs.mu.Unlock()
-
-	encrypted, err := base64.StdEncoding.DecodeString(f.EncryptedB64)
-	if err != nil {
-		return
-	}
-
-	now := time.Now()
-	fs.files[f.ID] = &StoredFile{
-		ID:        f.ID,
-		encrypted: encrypted,
-		Filename:  f.Name,
-		MimeType:  f.MimeType,
-		Size:      f.Size,
-		CreatedAt: now,
-		ExpiresAt: now.Add(fs.expiry),
-	}
+	return fs.storeEncryptedLocked(f, time.Now())
 }
 
-// GetEncryptedFiles returns all encrypted file blobs for client-side decryption.
-func (fs *FileStore) GetEncryptedFiles() []EncryptedFileInfo {
+// GetEncryptedFilesMeta returns metadata (id + encrypted metadata blob) for all
+// sealed files, WITHOUT the content ciphertext. Content is fetched lazily via
+// GetEncryptedContent so a 2s poll stays cheap.
+func (fs *FileStore) GetEncryptedFilesMeta() []EncryptedFileMeta {
 	fs.mu.RLock()
 	defer fs.mu.RUnlock()
 
-	var result []EncryptedFileInfo
+	var result []EncryptedFileMeta
 	for _, file := range fs.files {
 		file.mu.RLock()
 		if file.encrypted != nil {
-			result = append(result, EncryptedFileInfo{
-				ID:          file.ID,
-				Name:        file.Filename,
-				MimeType:    file.MimeType,
-				Size:        file.Size,
-				EncryptedB64: base64.StdEncoding.EncodeToString(file.encrypted),
+			result = append(result, EncryptedFileMeta{
+				ID:               file.ID,
+				EncryptedMetaB64: base64.StdEncoding.EncodeToString(file.encryptedMeta),
+				UploadedAt:       file.CreatedAt.Format("2006-01-02T15:04:05Z"),
+				ExpiresAt:        file.ExpiresAt.Format("2006-01-02T15:04:05Z"),
 			})
 		}
 		file.mu.RUnlock()
@@ -500,24 +542,32 @@ func (fs *FileStore) GetEncryptedFiles() []EncryptedFileInfo {
 	return result
 }
 
-// ClearEncryptedData shreds all encrypted file blobs.
-// Called after client successfully decrypts and re-uploads plaintext data.
-func (fs *FileStore) ClearEncryptedData() {
-	fs.mu.Lock()
-	defer fs.mu.Unlock()
-
-	for id, file := range fs.files {
-		file.mu.Lock()
-		if file.encrypted != nil {
-			secure.Shred(file.encrypted)
-			file.encrypted = nil
-		}
-		// If no plaintext data either, remove the file
-		if file.data == nil {
-			file.mu.Unlock()
-			delete(fs.files, id)
-		} else {
-			file.mu.Unlock()
-		}
+// GetEncryptedContent returns the content ciphertext for a single sealed file,
+// for client-side decryption on download.
+func (fs *FileStore) GetEncryptedContent(id string) ([]byte, error) {
+	id, err := validate.FileID(id)
+	if err != nil {
+		return nil, ErrFileNotFound
 	}
+
+	fs.mu.RLock()
+	file, exists := fs.files[id]
+	fs.mu.RUnlock()
+	if !exists {
+		return nil, ErrFileNotFound
+	}
+
+	file.mu.RLock()
+	defer file.mu.RUnlock()
+
+	if time.Now().After(file.ExpiresAt) {
+		return nil, ErrFileExpired
+	}
+	if file.encrypted == nil {
+		return nil, ErrFileNotFound
+	}
+
+	out := make([]byte, len(file.encrypted))
+	copy(out, file.encrypted)
+	return out, nil
 }
