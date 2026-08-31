@@ -322,13 +322,17 @@ function App() {
       // If we have encryption key and image is encrypted, decrypt it
       if (data.encrypted_b64 && encryptionKeyRef.current) {
         try {
-          const encryptedData = crypto.fromBase64(data.encrypted_b64)
-          const imageBytes = await crypto.decrypt(encryptionKeyRef.current, encryptedData)
-          const base64Image = crypto.toBase64(imageBytes)
+          const imageBytes = await crypto.decrypt(encryptionKeyRef.current, crypto.fromBase64(data.encrypted_b64))
+          let mimeType = 'image/png'
+          if (data.encryptedMime_b64) {
+            try {
+              mimeType = await crypto.decryptText(encryptionKeyRef.current, crypto.fromBase64(data.encryptedMime_b64))
+            } catch (e) { /* fall back to png */ }
+          }
           setClipboardImageData({
             hasImage: true,
-            mimeType: data.mimeType || 'image/png',
-            localDecryptedData: base64Image
+            mimeType,
+            localDecryptedData: crypto.toBase64(imageBytes)
           })
         } catch (err) {
           console.error('Failed to decrypt clipboard image:', err)
@@ -431,14 +435,14 @@ function App() {
     try {
       let bodyData
 
-      // E2EE: If locked (have encryption key), encrypt before sending
+      // E2EE: If locked (have encryption key), encrypt content AND mime type
       if (encryptionKeyRef.current) {
-        // Convert base64 to bytes, encrypt, then send as encrypted_b64
         const imageBytes = crypto.fromBase64(base64Data)
         const encrypted = await crypto.encrypt(encryptionKeyRef.current, imageBytes)
+        const encryptedMime = await crypto.encryptText(encryptionKeyRef.current, mimetype)
         bodyData = {
           encrypted_b64: crypto.toBase64(encrypted),
-          mimetype
+          encryptedMime_b64: crypto.toBase64(encryptedMime)
         }
       } else {
         bodyData = { image: base64Data, mimetype }
@@ -655,6 +659,7 @@ function App() {
       // 2. Encrypt existing data if not clearing
       let encryptedClipboard = null
       let encryptedImage = null
+      let encryptedImageMime = null
       let encryptedFiles = []
 
       if (!clearExisting) {
@@ -676,6 +681,7 @@ function App() {
           const imageBlob = await imageResponse.blob()
           const imageBytes = new Uint8Array(await imageBlob.arrayBuffer())
           encryptedImage = await crypto.encrypt(key, imageBytes)
+          encryptedImageMime = await crypto.encryptText(key, clipboardImageData?.mimeType || 'image/png')
         }
 
         // Encrypt files. Same rule: if any file cannot be re-downloaded and
@@ -713,7 +719,7 @@ function App() {
           clearExisting,
           encryptedClipboard_b64: encryptedClipboard ? crypto.toBase64(encryptedClipboard) : null,
           encryptedImage_b64: encryptedImage ? crypto.toBase64(encryptedImage) : null,
-          imageMimeType: clipboardImageData?.mimeType || null,
+          encryptedImageMime_b64: encryptedImageMime ? crypto.toBase64(encryptedImageMime) : null,
           encryptedFiles: encryptedFiles.length > 0 ? encryptedFiles : null
         })
       })
@@ -818,9 +824,15 @@ function App() {
       if (data.encryptedImage_b64) {
         try {
           const imageBytes = await crypto.decrypt(activeKey, crypto.fromBase64(data.encryptedImage_b64))
+          let mimeType = 'image/png'
+          if (data.encryptedImageMime_b64) {
+            try {
+              mimeType = await crypto.decryptText(activeKey, crypto.fromBase64(data.encryptedImageMime_b64))
+            } catch (e) { /* fall back to png */ }
+          }
           setClipboardImageData({
             hasImage: true,
-            mimeType: data.imageMimeType || 'image/png',
+            mimeType,
             localDecryptedData: crypto.toBase64(imageBytes) // Local only, never sent to server
           })
         } catch (err) {

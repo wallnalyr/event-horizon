@@ -8,14 +8,14 @@ import (
 	"github.com/awnumar/memguard"
 )
 
-// ShredPasses defines the number of overwrite passes for DoD 5220.22-M compliance.
+// ShredPasses defines the number of overwrite passes for the multi-pass wipe.
 // Pass 1: All zeros (0x00)
 // Pass 2: All ones (0xFF)
 // Pass 3: Cryptographically secure random data
 // Pass 4: memguard secure zero (constant-time)
 const ShredPasses = 4
 
-// Shred securely wipes a byte slice using DoD 5220.22-M standard.
+// Shred securely wipes a byte slice with a multi-pass overwrite, in place.
 // After shredding, the slice will contain zeros.
 //
 // WARNING: This operates on the original slice in place.
@@ -47,35 +47,9 @@ func Shred(data []byte) {
 	memguard.WipeBytes(data)
 }
 
-// ShredBuffer securely wipes a SecureBuffer.
-// memguard already performs secure wiping on Destroy(), so we just
-// call Destroy() which handles everything safely under its internal locks.
-// The buffer is destroyed after this call.
-func ShredBuffer(buf *SecureBuffer) {
-	if buf == nil {
-		return
-	}
-
-	// memguard's Destroy() already wipes the buffer securely before freeing.
-	// Attempting manual multi-pass overwrites can race with guard page
-	// protection and cause segfaults. Just let memguard handle it.
-	buf.Destroy()
-}
-
-// ShredKey securely wipes a SecureKey.
-// The key is destroyed after shredding.
-func ShredKey(key *SecureKey) {
-	if key == nil || key.IsDestroyed() {
-		return
-	}
-	key.Destroy()
-}
-
-// Shredder provides batch secure deletion with tracking.
+// Shredder provides batch secure deletion of raw byte slices.
 type Shredder struct {
 	mu         sync.Mutex
-	buffers    []*SecureBuffer
-	keys       []*SecureKey
 	rawSlices  [][]byte
 	onShredded func(count int)
 }
@@ -88,28 +62,7 @@ func NewShredder(onShredded func(count int)) *Shredder {
 	}
 }
 
-// TrackBuffer adds a SecureBuffer to be shredded later.
-func (s *Shredder) TrackBuffer(buf *SecureBuffer) {
-	if buf == nil {
-		return
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.buffers = append(s.buffers, buf)
-}
-
-// TrackKey adds a SecureKey to be shredded later.
-func (s *Shredder) TrackKey(key *SecureKey) {
-	if key == nil {
-		return
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.keys = append(s.keys, key)
-}
-
 // TrackRaw adds a raw byte slice to be shredded later.
-// Use sparingly - prefer SecureBuffer for sensitive data.
 func (s *Shredder) TrackRaw(data []byte) {
 	if len(data) == 0 {
 		return
@@ -126,26 +79,6 @@ func (s *Shredder) ShredAll() int {
 	defer s.mu.Unlock()
 
 	count := 0
-
-	// Shred buffers
-	for _, buf := range s.buffers {
-		if buf != nil && !buf.IsDestroyed() {
-			ShredBuffer(buf)
-			count++
-		}
-	}
-	s.buffers = nil
-
-	// Shred keys
-	for _, key := range s.keys {
-		if key != nil && !key.IsDestroyed() {
-			ShredKey(key)
-			count++
-		}
-	}
-	s.keys = nil
-
-	// Shred raw slices
 	for _, data := range s.rawSlices {
 		if len(data) > 0 {
 			Shred(data)
@@ -165,5 +98,5 @@ func (s *Shredder) ShredAll() int {
 func (s *Shredder) Count() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return len(s.buffers) + len(s.keys) + len(s.rawSlices)
+	return len(s.rawSlices)
 }
