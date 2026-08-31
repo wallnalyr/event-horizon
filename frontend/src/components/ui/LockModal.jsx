@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { Modal } from './Modal'
+import { Icon } from './Icon'
 
 export function LockModal({ isOpen, onClose, onLock, hasExistingData }) {
   const [password, setPassword] = useState('')
@@ -70,7 +71,7 @@ export function LockModal({ isOpen, onClose, onLock, hasExistingData }) {
                        disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
           >
             {loading && (
-              <span className="material-symbols-outlined animate-spin text-lg">progress_activity</span>
+              <Icon name="progress_activity" className="animate-spin text-lg" />
             )}
             {loading ? 'Deriving Key...' : 'Seal Session'}
           </button>
@@ -81,7 +82,7 @@ export function LockModal({ isOpen, onClose, onLock, hasExistingData }) {
         {hasExistingData && (
           <div className="bg-kurz-yellow/20 border-2 border-kurz-yellow rounded p-3">
             <div className="flex items-start gap-2">
-              <span className="material-symbols-outlined text-kurz-orange text-lg mt-0.5">warning</span>
+              <Icon name="warning" className="text-kurz-orange text-lg mt-0.5" />
               <p className="text-sm text-kurz-dark">
                 <strong>Warning:</strong> If data already exists, it will be encrypted but anyone who already viewed it has that information.
                 For best security, lock <strong>before</strong> adding sensitive content.
@@ -255,7 +256,7 @@ export function UnlockModal({ isOpen, onClose, onUnlock, onForceUnlock, isUnlock
                          disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
             >
               {loading && (
-                <span className="material-symbols-outlined animate-spin text-lg">progress_activity</span>
+                <Icon name="progress_activity" className="animate-spin text-lg" />
               )}
               Consume & Unseal
             </button>
@@ -265,7 +266,7 @@ export function UnlockModal({ isOpen, onClose, onUnlock, onForceUnlock, isUnlock
         <div className="space-y-4">
           <div className="bg-kurz-pink/10 border-2 border-kurz-pink rounded p-3">
             <div className="flex items-start gap-2">
-              <span className="material-symbols-outlined text-kurz-pink text-lg mt-0.5">warning</span>
+              <Icon name="warning" className="text-kurz-pink text-lg mt-0.5" />
               <p className="text-sm text-kurz-dark">
                 <strong>Warning:</strong> Removing the seal will send all encrypted data to the singularity.
                 The session will return to unencrypted mode.
@@ -321,7 +322,7 @@ export function UnlockModal({ isOpen, onClose, onUnlock, onForceUnlock, isUnlock
         <div className="space-y-4">
           <div className="bg-kurz-green/10 border-2 border-kurz-green rounded p-3">
             <div className="flex items-start gap-2">
-              <span className="material-symbols-outlined text-kurz-green text-lg mt-0.5">lock</span>
+              <Icon name="lock" className="text-kurz-green text-lg mt-0.5" />
               <div>
                 <p className="text-sm font-semibold text-kurz-dark">Session is sealed and protected</p>
                 <p className="text-sm text-kurz-dark mt-1">
@@ -337,7 +338,7 @@ export function UnlockModal({ isOpen, onClose, onUnlock, onForceUnlock, isUnlock
               className="w-full text-left flex items-center gap-3 p-3 rounded border-2 border-kurz-dark/20
                          hover:bg-kurz-bg transition-colors"
             >
-              <span className="material-symbols-outlined text-kurz-pink">lock_open</span>
+              <Icon name="lock_open" className="text-kurz-pink" />
               <div>
                 <p className="font-display font-bold text-kurz-dark">Remove Seal</p>
                 <p className="text-sm text-gray-600">
@@ -379,7 +380,7 @@ export function UnlockModal({ isOpen, onClose, onUnlock, onForceUnlock, isUnlock
                          disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
             >
               {loading && (
-                <span className="material-symbols-outlined animate-spin text-lg">progress_activity</span>
+                <Icon name="progress_activity" className="animate-spin text-lg" />
               )}
               Consume & Breach
             </button>
@@ -389,7 +390,7 @@ export function UnlockModal({ isOpen, onClose, onUnlock, onForceUnlock, isUnlock
         <div className="space-y-4">
           <div className="bg-kurz-pink/10 border-2 border-kurz-pink rounded p-3">
             <div className="flex items-start gap-2">
-              <span className="material-symbols-outlined text-kurz-pink text-lg mt-0.5">warning</span>
+              <Icon name="warning" className="text-kurz-pink text-lg mt-0.5" />
               <p className="text-sm text-kurz-dark">
                 <strong>Warning:</strong> This will send all encrypted data to the singularity.
                 Nothing escapes a black hole.
@@ -450,7 +451,7 @@ export function UnlockModal({ isOpen, onClose, onUnlock, onForceUnlock, isUnlock
                        disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
           >
             {loading && (
-              <span className="material-symbols-outlined animate-spin text-lg">progress_activity</span>
+              <Icon name="progress_activity" className="animate-spin text-lg" />
             )}
             {loading ? 'Decrypting...' : 'Unlock'}
           </button>

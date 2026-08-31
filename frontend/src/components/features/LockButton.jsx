@@ -1,4 +1,5 @@
 import { motion } from 'framer-motion'
+import { Icon } from '../ui/Icon'
 
 export function LockButton({ isLocked, hasUnlockedKey, onClick }) {
   // Determine button state:
@@ -45,9 +46,7 @@ export function LockButton({ isLocked, hasUnlockedKey, onClick }) {
       `}
       aria-label={state.ariaLabel}
     >
-      <span className="material-symbols-outlined text-lg">
-        {state.icon}
-      </span>
+      <Icon name={state.icon} className="text-lg" />
       <span className="hidden sm:inline">
         {state.text}
       </span>

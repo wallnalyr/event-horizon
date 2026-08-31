@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from 'react'
 import { toast } from 'sonner'
 import { ConfirmModal } from '../ui/Modal'
+import { Icon } from '../ui/Icon'
 
 const MAX_IMAGE_SIZE = 1 * 1024 * 1024 // 1MB
 
@@ -178,7 +179,7 @@ export function ClipboardImage({
     <div className="kurz-card-shadow kurz-border bg-white rounded overflow-hidden">
       <div className="bg-kurz-dark p-3 flex items-center justify-between">
         <div className="flex items-center gap-2">
-          <span className="material-symbols-outlined text-kurz-purple">image</span>
+          <Icon name="image" className="text-kurz-purple" />
           <span className="font-display font-bold text-white uppercase text-sm">
             Photon Capture
           </span>
@@ -232,9 +233,7 @@ export function ClipboardImage({
             </div>
           ) : (
             <div className="text-center p-6">
-              <span className="material-symbols-outlined text-4xl text-gray-300 block mb-2">
-                add_photo_alternate
-              </span>
+              <Icon name="add_photo_alternate" className="text-4xl text-gray-300 block mb-2" />
               <p className="text-gray-500 font-display text-sm">
                 Tap to select or paste an image
               </p>
@@ -257,7 +256,7 @@ export function ClipboardImage({
                          focus:outline-none focus-visible:ring-2 focus-visible:ring-kurz-cyan focus-visible:ring-offset-2"
               aria-label="Replace image"
             >
-              <span className="material-symbols-outlined text-lg">swap_horiz</span>
+              <Icon name="swap_horiz" className="text-lg" />
             </button>
           )}
           <button
@@ -269,9 +268,7 @@ export function ClipboardImage({
                        flex items-center justify-center gap-2 min-h-[44px]
                        focus:outline-none focus-visible:ring-2 focus-visible:ring-kurz-cyan focus-visible:ring-offset-2"
           >
-            <span className="material-symbols-outlined text-lg">
-              {copying ? 'hourglass_empty' : 'content_copy'}
-            </span>
+            <Icon name={copying ? 'hourglass_empty' : 'content_copy'} className="text-lg" />
             {copying ? 'Copying...' : 'Copy'}
           </button>
           <button
@@ -283,7 +280,7 @@ export function ClipboardImage({
                        flex items-center justify-center gap-2 min-h-[44px]
                        focus:outline-none focus-visible:ring-2 focus-visible:ring-kurz-cyan focus-visible:ring-offset-2"
           >
-            <span className="material-symbols-outlined text-lg">delete_forever</span>
+            <Icon name="delete_forever" className="text-lg" />
             Singularity
           </button>
         </div>

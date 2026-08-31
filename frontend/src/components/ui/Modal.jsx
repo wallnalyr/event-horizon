@@ -3,6 +3,7 @@ import { motion, AnimatePresence } from 'framer-motion'
 import { createPortal } from 'react-dom'
 import { modalOverlayVariants, modalContentVariants } from '../../lib/animations'
 import { useReducedMotion } from '../../hooks/useReducedMotion'
+import { Icon } from './Icon'
 
 export function Modal({
   isOpen,
@@ -90,9 +91,7 @@ export function Modal({
           >
             <div className="p-6 pb-4">
               <div className="flex items-center gap-3">
-                <span className={`material-symbols-outlined text-3xl ${iconStyles[variant].color}`}>
-                  {iconStyles[variant].icon}
-                </span>
+                <Icon name={iconStyles[variant].icon} className={`text-3xl ${iconStyles[variant].color}`} />
                 <h2 id="modal-title" className="font-display font-bold text-xl text-kurz-dark uppercase">
                   {title}
                 </h2>

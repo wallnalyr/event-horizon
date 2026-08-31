@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { toast } from 'sonner'
 import { ConfirmModal } from '../ui/Modal'
 import { LineNumberedTextarea } from '../ui/LineNumberedTextarea'
+import { Icon } from '../ui/Icon'
 
 export function Clipboard({
   text,
@@ -30,7 +31,7 @@ export function Clipboard({
     <div className="kurz-card-shadow kurz-border bg-white rounded overflow-hidden">
       <div className="bg-kurz-dark p-3 flex items-center justify-between">
         <div className="flex items-center gap-2">
-          <span className="material-symbols-outlined text-kurz-green">content_paste</span>
+          <Icon name="content_paste" className="text-kurz-green" />
           <span className="font-display font-bold text-white uppercase text-sm">
             Wormhole
           </span>
@@ -45,9 +46,7 @@ export function Clipboard({
                        focus:outline-none focus-visible:ring-2 focus-visible:ring-kurz-cyan"
             aria-label={expanded ? 'Collapse clipboard' : 'Expand clipboard'}
           >
-            <span className="material-symbols-outlined text-lg">
-              {expanded ? 'expand_less' : 'expand_more'}
-            </span>
+            <Icon name={expanded ? 'expand_less' : 'expand_more'} className="text-lg" />
           </button>
         </div>
       </div>
@@ -70,7 +69,7 @@ export function Clipboard({
                        flex items-center justify-center gap-2 min-h-[44px]
                        focus:outline-none focus-visible:ring-2 focus-visible:ring-kurz-cyan focus-visible:ring-offset-2"
           >
-            <span className="material-symbols-outlined text-lg">content_copy</span>
+            <Icon name="content_copy" className="text-lg" />
             Copy
           </button>
           <button
@@ -82,7 +81,7 @@ export function Clipboard({
                        flex items-center justify-center gap-2 min-h-[44px]
                        focus:outline-none focus-visible:ring-2 focus-visible:ring-kurz-cyan focus-visible:ring-offset-2"
           >
-            <span className="material-symbols-outlined text-lg">delete_forever</span>
+            <Icon name="delete_forever" className="text-lg" />
             Singularity
           </button>
         </div>

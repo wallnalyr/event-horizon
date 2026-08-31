@@ -59,12 +59,15 @@
     border: 2px solid #080f2b;
   }
 
+  /* Signature hard offset shadow, plus a subtle soft ambient layer for a more
+     modern sense of depth (keeps the neo-brutalist edge). */
   .kurz-card-shadow {
-    box-shadow: 4px 4px 0 0 #080f2b;
+    box-shadow: 4px 4px 0 0 #080f2b, 0 12px 28px -14px rgba(8, 15, 43, 0.35);
+    transition: box-shadow 0.2s ease, transform 0.2s ease;
   }
 
   .kurz-shadow-sm {
-    box-shadow: 2px 2px 0 0 #080f2b;
+    box-shadow: 2px 2px 0 0 #080f2b, 0 6px 16px -10px rgba(8, 15, 43, 0.3);
   }
 
   .geometric-bg {
