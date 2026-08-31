@@ -37,30 +37,30 @@ func NewFilesHandler(files *store.FileStore, session *store.SessionManager, maxF
 
 // FileResponse is the response for a single file.
 type FileResponse struct {
-	ID           string `json:"id"`
-	Name         string `json:"name"`
-	MimeType     string `json:"mimetype"`
-	Size         int64  `json:"size"`
-	UploadedAt   string `json:"uploadedAt,omitempty"`
-	ExpiresAt    string `json:"expiresAt,omitempty"`
-	EncryptedB64 string `json:"encrypted_b64,omitempty"` // E2EE: encrypted file data when locked
+	ID               string `json:"id"`
+	Name             string `json:"name,omitempty"`
+	MimeType         string `json:"mimetype,omitempty"`
+	Size             int64  `json:"size"` // no omitempty: a legitimately 0-byte file must report size 0
+	UploadedAt       string `json:"uploadedAt,omitempty"`
+	ExpiresAt        string `json:"expiresAt,omitempty"`
+	EncryptedMetaB64 string `json:"encryptedMeta_b64,omitempty"` // E2EE: encrypted name/mimetype/size when locked
 }
 
 // List handles GET /api/files
-// E2EE: When session is locked, returns encrypted_b64 for each file.
+// E2EE: When session is locked, returns metadata-only entries (id + encrypted
+// metadata blob). Content is fetched lazily on download, so a poll stays cheap
+// and never forces the client to re-decrypt every file.
 func (h *FilesHandler) List(w http.ResponseWriter, r *http.Request) {
-	// E2EE: If session is locked, return encrypted files for client-side decryption
 	if h.session.IsLocked() {
-		encryptedFiles := h.files.GetEncryptedFiles()
-		resp := make([]FileResponse, 0, len(encryptedFiles))
+		metas := h.files.GetEncryptedFilesMeta()
+		resp := make([]FileResponse, 0, len(metas))
 
-		for _, f := range encryptedFiles {
+		for _, f := range metas {
 			resp = append(resp, FileResponse{
-				ID:           f.ID,
-				Name:         f.Name,
-				MimeType:     f.MimeType,
-				Size:         f.Size,
-				EncryptedB64: f.EncryptedB64,
+				ID:               f.ID,
+				EncryptedMetaB64: f.EncryptedMetaB64,
+				UploadedAt:       f.UploadedAt,
+				ExpiresAt:        f.ExpiresAt,
 			})
 		}
 
@@ -166,17 +166,15 @@ func (h *FilesHandler) Upload(w http.ResponseWriter, r *http.Request) {
 }
 
 // EncryptedUploadRequest is the request for uploading encrypted files.
-// E2EE: Client encrypts file locally and sends ciphertext.
+// E2EE: Client encrypts both the file content and its metadata locally.
 type EncryptedUploadRequest struct {
-	ID           string `json:"id"`           // Client-generated file ID
-	Name         string `json:"name"`         // Original filename
-	MimeType     string `json:"mimetype"`     // Original MIME type
-	Size         int64  `json:"size"`         // Original unencrypted size
-	EncryptedB64 string `json:"encrypted_b64"` // Base64-encoded encrypted data
+	ID               string `json:"id"`                // Client-generated file ID
+	EncryptedMetaB64 string `json:"encryptedMeta_b64"` // AES-GCM of {name, mimetype, size}
+	EncryptedB64     string `json:"encrypted_b64"`     // AES-GCM of file content
 }
 
 // UploadEncrypted handles POST /api/upload/encrypted
-// E2EE: Receives encrypted file data from client. Server cannot decrypt.
+// E2EE: Receives encrypted file data + encrypted metadata. Server cannot decrypt either.
 func (h *FilesHandler) UploadEncrypted(w http.ResponseWriter, r *http.Request) {
 	// Only allow when session is locked
 	if !h.session.IsLocked() {
@@ -190,20 +188,27 @@ func (h *FilesHandler) UploadEncrypted(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Validate filename
-	filename, err := validate.Filename(req.Name)
-	if err != nil {
-		http.Error(w, "Invalid filename", http.StatusBadRequest)
+	if req.ID == "" {
+		http.Error(w, "Missing file id", http.StatusBadRequest)
+		return
+	}
+	if _, err := validate.FileID(req.ID); err != nil {
+		http.Error(w, "Invalid file id", http.StatusBadRequest)
 		return
 	}
 
-	// Validate MIME type
-	mimeType := validate.MIMETypeOrDefault(req.MimeType, "application/octet-stream")
-
-	// Decode encrypted data
+	// Decode encrypted content to enforce the size limit before storing.
 	encrypted, err := decodeBase64Files(req.EncryptedB64)
 	if err != nil {
 		http.Error(w, "Invalid encrypted data", http.StatusBadRequest)
+		return
+	}
+	if req.EncryptedMetaB64 == "" {
+		http.Error(w, "Missing encrypted metadata", http.StatusBadRequest)
+		return
+	}
+	if _, err := decodeBase64Files(req.EncryptedMetaB64); err != nil {
+		http.Error(w, "Invalid encrypted metadata", http.StatusBadRequest)
 		return
 	}
 
@@ -213,29 +218,20 @@ func (h *FilesHandler) UploadEncrypted(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Store as encrypted file
-	id := req.ID
-	if id == "" {
-		id = fmt.Sprintf("%d-%s", r.Context().Value("timestamp"), filename)
+	// Add to encrypted files list (server cannot decrypt content or metadata).
+	ok := h.files.AddEncryptedFile(store.EncryptedFileInfo{
+		ID:               req.ID,
+		EncryptedMetaB64: req.EncryptedMetaB64,
+		EncryptedB64:     req.EncryptedB64,
+	})
+	if !ok {
+		http.Error(w, "Storage full", http.StatusInsufficientStorage)
+		return
 	}
-
-	// Create encrypted file info and add to store
-	encryptedFile := store.EncryptedFileInfo{
-		ID:           id,
-		Name:         filename,
-		MimeType:     mimeType,
-		Size:         req.Size,
-		EncryptedB64: req.EncryptedB64,
-	}
-
-	// Add to encrypted files list
-	h.files.AddEncryptedFile(encryptedFile)
 
 	resp := FileResponse{
-		ID:       id,
-		Name:     filename,
-		MimeType: mimeType,
-		Size:     req.Size,
+		ID:               req.ID,
+		EncryptedMetaB64: req.EncryptedMetaB64,
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -251,6 +247,28 @@ func (h *FilesHandler) Download(w http.ResponseWriter, r *http.Request) {
 	id, err := validate.FileID(id)
 	if err != nil {
 		http.Error(w, "Invalid file ID", http.StatusBadRequest)
+		return
+	}
+
+	// E2EE: when locked, return the content ciphertext for client-side decryption.
+	// The client fetches this lazily on download rather than on every poll.
+	if h.session.IsLocked() {
+		encrypted, err := h.files.GetEncryptedContent(id)
+		if err != nil {
+			switch err {
+			case store.ErrFileNotFound:
+				http.Error(w, "File not found", http.StatusNotFound)
+			case store.ErrFileExpired:
+				http.Error(w, "File expired", http.StatusGone)
+			default:
+				http.Error(w, "Failed to get file", http.StatusInternalServerError)
+			}
+			return
+		}
+		w.Header().Set("Content-Type", "application/octet-stream")
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.Header().Set("Content-Length", strconv.Itoa(len(encrypted)))
+		w.Write(encrypted)
 		return
 	}
 

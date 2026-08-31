@@ -28,6 +28,13 @@ type Config struct {
 	AllowedOrigins  []string      // CORS allowed origins
 	TrustProxy      bool          // Honor X-Forwarded-For / X-Real-IP for client IP
 
+	// TLS: serving over HTTPS provides a secure context so E2EE (Web Crypto) and
+	// the Copy button work over the LAN. If enabled with no cert/key files, the
+	// server generates a self-signed certificate on startup.
+	TLSEnabled  bool
+	TLSCertFile string
+	TLSKeyFile  string
+
 	// Feature flags
 	EnableClipboard      bool
 	EnableClipboardImage bool
@@ -160,6 +167,17 @@ func LoadFromEnv() *Config {
 	// deployment exposes the port directly, where those headers are attacker-controlled.
 	if v := os.Getenv("TRUST_PROXY"); v != "" {
 		cfg.TrustProxy = v == "true" || v == "1" || v == "yes"
+	}
+
+	// TLS settings.
+	if v := os.Getenv("TLS_ENABLED"); v != "" {
+		cfg.TLSEnabled = v == "true" || v == "1" || v == "yes"
+	}
+	if v := os.Getenv("TLS_CERT_FILE"); v != "" {
+		cfg.TLSCertFile = v
+	}
+	if v := os.Getenv("TLS_KEY_FILE"); v != "" {
+		cfg.TLSKeyFile = v
 	}
 
 	// Feature flags

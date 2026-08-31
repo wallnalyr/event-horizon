@@ -118,9 +118,10 @@ When you seal the session with a password:
 
 | Data Type | Unsealed | Sealed |
 |-----------|----------|--------|
-| Files | Server-readable, memory-protected | E2EE ciphertext only |
+| File contents | Server-readable, memory-protected | E2EE ciphertext only |
+| File metadata (name, type, size) | Server-readable | **Encrypted** — the server stores an opaque metadata blob and only sees ciphertext lengths |
 | Clipboard Text | Server-readable, memory-protected | E2EE ciphertext only |
-| Clipboard Images | Server-readable, memory-protected | E2EE ciphertext only |
+| Clipboard Images | Server-readable, memory-protected | E2EE ciphertext only (image MIME type is stored in the clear) |
 | Password | N/A | Never sent to server |
 | Encryption Key | N/A | Never sent to server |
 | Key Hash | N/A | Server stores (cannot reverse) |
@@ -313,6 +314,17 @@ docker compose up -d --build
 # Access at http://localhost:9000
 ```
 
+**Enabling E2EE (recommended):** Session Sealing needs a secure context. On the
+same machine, `http://localhost:9000` already qualifies. To seal from other
+devices over the LAN, serve HTTPS — set `TLS_ENABLED=true` (a self-signed cert is
+generated automatically; your browser will warn once, then E2EE works), or put
+the app behind a TLS reverse proxy:
+
+```bash
+docker compose run -e TLS_ENABLED=true -p 9000:9000 fileez
+# then open https://<lan-ip>:9000 and accept the self-signed certificate
+```
+
 ### Development
 
 **Backend (Go):**
@@ -339,13 +351,17 @@ The frontend dev server runs on port 3000 and proxies API requests to the backen
 | `PORT` | `9000` | Server port |
 | `HOST` | `0.0.0.0` | Server host |
 | `MAX_FILE_SIZE` | `104857600` | Maximum file size in bytes (100MB) |
-| `MAX_MEMORY` | `536870912` | Maximum secure memory in bytes (512MB) |
+| `MAX_MEMORY` | `536870912` | Max tracked memory in bytes (512MB). Plaintext files are accounted at ~2x their size (rotating XOR pad), so this bounds real footprint, not logical bytes. |
 | `FILE_EXPIRY` | `24h` | File expiry duration |
 | `CLIPBOARD_EXPIRY` | `1h` | Clipboard expiry duration |
 | `RATE_LIMIT` | `600` | Requests per minute (general) |
 | `UPLOAD_RATE_LIMIT` | `20` | Requests per minute (uploads) |
 | `ENABLE_CORS` | `true` | Enable CORS headers |
-| `ALLOWED_ORIGINS` | `*` | Allowed origins for CORS |
+| `ALLOWED_ORIGINS` | `*` | Comma-separated allowed origins. `*` = home-network mode: same-origin is enforced for state-changing requests (cross-site blocked), reads are permitted without credentials. |
+| `TRUST_PROXY` | `false` | Honor `X-Forwarded-For`/`X-Real-IP` for the rate-limit client key. Leave off unless behind a trusted reverse proxy. |
+| `TLS_ENABLED` | `false` | Serve over HTTPS. Provides the secure context E2EE and the Copy button require. |
+| `TLS_CERT_FILE` | _(none)_ | PEM certificate file. If `TLS_ENABLED` and no cert/key are given, a self-signed cert is generated on startup (browser will warn; accept it to enable E2EE). |
+| `TLS_KEY_FILE` | _(none)_ | PEM private-key file (pairs with `TLS_CERT_FILE`). |
 | `ENABLE_CLIPBOARD` | `true` | Enable clipboard feature |
 | `ENABLE_CLIPBOARD_IMAGE` | `true` | Enable image clipboard feature |
 | `ENABLE_FILE_SHARING` | `true` | Enable file sharing feature |
