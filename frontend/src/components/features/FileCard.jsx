@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { motion } from 'framer-motion'
 import { shredVariants } from '../../lib/animations'
 import { ConfirmModal } from '../ui/Modal'
+import { Icon } from '../ui/Icon'
 
 export function FileCard({
   file,
@@ -28,12 +29,11 @@ export function FileCard({
         animate={isShredding ? 'shredding' : undefined}
         className="p-4 flex items-center gap-3 bg-white hover:bg-kurz-bg/50 transition-colors"
       >
-        <span
-          className={`material-symbols-outlined text-3xl ${getIconColor(file.mimetype, file.name)}`}
+        <Icon
+          name={getFileIcon(file.mimetype, file.name)}
+          className={`text-3xl ${getIconColor(file.mimetype, file.name)}`}
           style={{ flexShrink: 0 }}
-        >
-          {getFileIcon(file.mimetype, file.name)}
-        </span>
+        />
 
         <div style={{ flex: '1 1 auto', minWidth: 0, overflow: 'hidden' }}>
           <p
@@ -60,7 +60,7 @@ export function FileCard({
                        focus:outline-none focus-visible:ring-2 focus-visible:ring-kurz-cyan focus-visible:ring-offset-2"
             aria-label={`Download ${file.name}`}
           >
-            <span className="material-symbols-outlined text-lg">download</span>
+            <Icon name="download" className="text-lg" />
           </motion.button>
           <motion.button
             onClick={() => setShowShredModal(true)}
@@ -71,7 +71,7 @@ export function FileCard({
                        focus:outline-none focus-visible:ring-2 focus-visible:ring-kurz-cyan focus-visible:ring-offset-2"
             aria-label={`Send ${file.name} to singularity`}
           >
-            <span className="material-symbols-outlined text-lg">delete_forever</span>
+            <Icon name="delete_forever" className="text-lg" />
           </motion.button>
         </div>
       </motion.div>

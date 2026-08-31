@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
+import { Icon } from './Icon'
 
 export function SecurityBanner({ isLocked, onSeal }) {
   const [dismissed, setDismissed] = useState(false)
@@ -35,9 +36,7 @@ export function SecurityBanner({ isLocked, onSeal }) {
       >
         <div className="max-w-3xl mx-auto px-4 px-safe py-2 flex items-center justify-between gap-3">
           <div className="flex items-center gap-2 flex-1">
-            <span className="material-symbols-outlined text-lg" aria-hidden="true">
-              {secureContext ? 'lock_open' : 'warning'}
-            </span>
+            <Icon name={secureContext ? 'lock_open' : 'warning'} className="text-lg" aria-hidden="true" />
             <p className="text-xs font-display font-semibold">{message}</p>
           </div>
           <div className="flex items-center gap-1">
@@ -55,7 +54,7 @@ export function SecurityBanner({ isLocked, onSeal }) {
               className="p-1 hover:bg-kurz-dark/10 rounded transition-colors min-w-[32px] min-h-[32px] flex items-center justify-center"
               aria-label="Dismiss warning"
             >
-              <span className="material-symbols-outlined text-lg">close</span>
+              <Icon name="close" className="text-lg" />
             </button>
           </div>
         </div>

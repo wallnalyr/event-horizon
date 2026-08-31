@@ -1,5 +1,6 @@
 import { useRef, useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
+import { Icon } from '../ui/Icon'
 import { uploadZoneVariants } from '../../lib/animations'
 import { useReducedMotion } from '../../hooks/useReducedMotion'
 
@@ -69,11 +70,11 @@ export function UploadZone({ onUpload, uploading, uploadProgress = 0 }) {
             className="flex flex-col items-center"
           >
             <motion.span
-              className="material-symbols-outlined text-5xl text-kurz-blue block mb-3"
+              className="text-5xl text-kurz-blue block mb-3"
               animate={{ rotate: 360 }}
               transition={{ repeat: Infinity, duration: 1, ease: 'linear' }}
             >
-              progress_activity
+              <Icon name="progress_activity" />
             </motion.span>
             <p className="font-display font-bold text-kurz-dark uppercase mb-3">
               Capturing...
@@ -97,10 +98,10 @@ export function UploadZone({ onUpload, uploading, uploadProgress = 0 }) {
             className="flex flex-col items-center"
           >
             <motion.span
-              className="material-symbols-outlined text-5xl text-kurz-cyan block mb-3"
+              className="text-5xl text-kurz-cyan block mb-3"
               animate={dragOver ? { scale: 1.2, y: -5 } : { scale: 1, y: 0 }}
             >
-              cloud_upload
+              <Icon name="cloud_upload" />
             </motion.span>
             <p className="font-display font-bold text-kurz-dark uppercase">
               {dragOver ? 'Release to accrete' : 'Drop files to accrete'}

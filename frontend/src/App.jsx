@@ -16,6 +16,7 @@ import { Clipboard } from './components/features/Clipboard'
 import { ClipboardImage } from './components/features/ClipboardImage'
 import { FileCard } from './components/features/FileCard'
 import { LockButton } from './components/features/LockButton'
+import { Icon } from './components/ui/Icon'
 
 // Hooks
 import { useReducedMotion } from './hooks/useReducedMotion'
@@ -1002,7 +1003,7 @@ function App() {
             // Locked overlay - no animation to prevent flash on state updates
             <div className="kurz-card-shadow kurz-border bg-white rounded overflow-hidden">
               <div className="p-8 text-center">
-                <span className="material-symbols-outlined text-6xl text-kurz-blue block mb-4">lock</span>
+                <Icon name="lock" className="text-6xl text-kurz-blue block mb-4" />
                 <h2 className="font-display font-bold text-2xl text-kurz-dark uppercase mb-2">
                   Session Sealed
                 </h2>
@@ -1031,9 +1032,7 @@ function App() {
               {/* Accretion Section */}
               <section aria-labelledby="accretion-heading">
                 <div className="flex items-center gap-2 mb-4">
-                  <span className="material-symbols-outlined text-kurz-orange text-2xl" aria-hidden="true">
-                    cyclone
-                  </span>
+                  <Icon name="cyclone" className="text-kurz-orange text-2xl" aria-hidden="true" />
                   <h2 id="accretion-heading" className="font-display font-black text-xl text-kurz-dark uppercase tracking-tight">
                     Accretion
                   </h2>
@@ -1061,16 +1060,12 @@ function App() {
                   <div className="kurz-card-shadow kurz-border bg-white rounded overflow-hidden">
                     <div className="bg-kurz-dark p-3 flex items-center justify-between">
                       <div className="flex items-center gap-2">
-                        <span className="material-symbols-outlined text-kurz-cyan" aria-hidden="true">
-                          inventory_2
-                        </span>
+                        <Icon name="inventory_2" className="text-kurz-cyan" aria-hidden="true" />
                         <span className="font-display font-bold text-white uppercase text-sm">
                           Accretion Disk
                         </span>
                         {isLocked && (
-                          <span className="material-symbols-outlined text-kurz-green text-sm" title="Encrypted">
-                            lock
-                          </span>
+                          <Icon name="lock" className="text-kurz-green text-sm" title="Encrypted" />
                         )}
                       </div>
                       <span
@@ -1087,9 +1082,7 @@ function App() {
                       </div>
                     ) : files.length === 0 ? (
                       <div className="p-8 text-center">
-                        <span className="material-symbols-outlined text-4xl text-gray-300 block mb-2" aria-hidden="true">
-                          folder_off
-                        </span>
+                        <Icon name="folder_off" className="text-4xl text-gray-300 block mb-2" aria-hidden="true" />
                         <p className="text-gray-500 font-display">No data in orbit yet</p>
                       </div>
                     ) : (
