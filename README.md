@@ -297,33 +297,55 @@ Content-Security-Policy: default-src 'self'; script-src 'self'; ...
 
 ## Quick Start
 
-### Docker - Standalone
+### Docker — pull the pre-built image (recommended)
+
+A multi-architecture image (`linux/amd64`, `linux/arm64`) is published to the
+GitHub Container Registry on every release, so no local build is needed:
 
 ```bash
-# Clone the repo
-git clone https://github.com/wallnalyr/event-horizon.git
-cd event-horizon
+# Grab the compose file
+curl -O https://raw.githubusercontent.com/wallnalyr/event-horizon/main/docker-compose.yml
 
-# Edit docker-compose.yml to uncomment the ports section:
-#   ports:
-#     - "9000:9000"
-
-# Start the container
-docker compose up -d --build
+# Pull and start (uses ghcr.io/wallnalyr/event-horizon:latest)
+docker compose pull
+docker compose up -d
 
 # Access at http://localhost:9000
 ```
 
-**Enabling E2EE (recommended):** Session Sealing needs a secure context. On the
-same machine, `http://localhost:9000` already qualifies. To seal from other
-devices over the LAN, serve HTTPS — set `TLS_ENABLED=true` (a self-signed cert is
-generated automatically; your browser will warn once, then E2EE works), or put
-the app behind a TLS reverse proxy:
+Pin a specific release with `EVENT_HORIZON_TAG=v1.0.0 docker compose up -d`.
+
+Images: `ghcr.io/wallnalyr/event-horizon:latest` · `:v1.0.0` · `:edge` (latest `main`).
+
+### Docker — build it yourself
 
 ```bash
-docker compose run -e TLS_ENABLED=true -p 9000:9000 fileez
-# then open https://<lan-ip>:9000 and accept the self-signed certificate
+git clone https://github.com/wallnalyr/event-horizon.git
+cd event-horizon
+# In docker-compose.yml, comment out `image:` and uncomment `build: .`, then:
+docker compose up -d --build
 ```
+
+**Enabling E2EE (recommended):** Session Sealing needs a secure context. On the
+same machine, `http://localhost:9000` already qualifies. To seal from other
+devices over the LAN, serve HTTPS — set `TLS_ENABLED=true` in the compose
+`environment:` (a self-signed cert is generated automatically; your browser
+warns once, then E2EE works), or put the app behind a TLS reverse proxy. Then
+open `https://<lan-ip>:9000` and accept the certificate.
+
+### Releasing (maintainers)
+
+Pushing a semver tag builds the multi-arch image, pushes it to GHCR, and cuts a
+GitHub Release automatically:
+
+```bash
+git tag v1.0.0
+git push origin v1.0.0
+```
+
+Pushes to `main` publish the `:edge` tag. The GHCR package must be made **public**
+once (repo → Packages → package settings → change visibility) for anonymous
+`docker pull`; otherwise consumers run `docker login ghcr.io` first.
 
 ### Development
 
