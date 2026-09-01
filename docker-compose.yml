@@ -1,8 +1,11 @@
-version: '3.8'
 services:
-  fileez:
-    build: .
-    container_name: fileez
+  event-horizon:
+    # Pull the pre-built multi-arch image (linux/amd64, linux/arm64) from GHCR.
+    # Override the tag with EVENT_HORIZON_TAG=v1.2.3 (defaults to :latest).
+    image: ghcr.io/wallnalyr/event-horizon:${EVENT_HORIZON_TAG:-latest}
+    # To build locally instead of pulling, comment out `image:` above and use:
+    # build: .
+    container_name: event-horizon
     ports:
       - "9000:9000"
     environment:
@@ -23,6 +26,9 @@ services:
       - ENABLE_CLIPBOARD=true
       - ENABLE_CLIPBOARD_IMAGE=true
       - ENABLE_FILE_SHARING=true
+      # E2EE needs a secure context. Set TLS_ENABLED=true to serve HTTPS with a
+      # self-signed cert (browsers warn once), or terminate TLS at a reverse proxy.
+      # - TLS_ENABLED=true
     restart: unless-stopped
 
     # Security: Send SIGTERM for graceful shutdown (secure data wipe)
@@ -65,9 +71,11 @@ services:
     mem_swappiness: 0
 
     healthcheck:
-      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:9000/api/health"]
+      # Works for both HTTP and HTTPS (if TLS_ENABLED=true is set above).
+      test:
+        - CMD-SHELL
+        - "wget -q -O /dev/null http://127.0.0.1:9000/api/ping || wget -q --no-check-certificate -O /dev/null https://127.0.0.1:9000/api/ping"
       interval: 30s
       timeout: 3s
       start_period: 10s
       retries: 3
-
