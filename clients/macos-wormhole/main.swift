@@ -11,6 +11,7 @@
 import AppKit
 import CryptoKit
 import CommonCrypto
+import ServiceManagement
 
 // MARK: - Persistence keys
 
@@ -140,6 +141,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSTextViewDelegate {
     private var textView: NSTextView!
     private var statusLabel: NSTextField!
     private var statusItem: NSStatusItem!
+    private var loginItem: NSMenuItem?
 
     // Config / session state
     private var serverURL: String { UserDefaults.standard.string(forKey: kServerURL) ?? "" }
@@ -302,11 +304,39 @@ final class AppController: NSObject, NSApplicationDelegate, NSTextViewDelegate {
         menu.addItem(withTitle: "Set Server URL…", action: #selector(setServerURL), keyEquivalent: "")
         menu.addItem(withTitle: "Unlock (sealed session)…", action: #selector(unlockAction), keyEquivalent: "")
         menu.addItem(NSMenuItem.separator())
-        menu.addItem(withTitle: "Quit", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        let login = NSMenuItem(title: "Launch at Login", action: #selector(toggleLaunchAtLogin(_:)), keyEquivalent: "")
+        menu.addItem(login)
+        loginItem = login
+        menu.addItem(NSMenuItem.separator())
+        let quit = NSMenuItem(title: "Quit", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        menu.addItem(quit)
         menu.items.forEach { $0.target = self }
-        // Keep terminate targeting the app.
-        menu.items.last?.target = nil
+        quit.target = nil // terminate targets the app, not the controller
         statusItem.menu = menu
+        updateLoginItemState()
+    }
+
+    // MARK: Launch at login (SMAppService, macOS 13+)
+
+    @objc private func toggleLaunchAtLogin(_ sender: NSMenuItem) {
+        do {
+            if SMAppService.mainApp.status == .enabled {
+                try SMAppService.mainApp.unregister()
+            } else {
+                try SMAppService.mainApp.register()
+            }
+        } catch {
+            setStatus("Launch-at-login failed: \(error.localizedDescription)")
+        }
+        updateLoginItemState()
+    }
+
+    private func updateLoginItemState() {
+        let status = SMAppService.mainApp.status
+        loginItem?.state = (status == .enabled) ? .on : .off
+        if status == .requiresApproval {
+            setStatus("Approve “Wormhole” in System Settings ▸ General ▸ Login Items")
+        }
     }
 
     // MARK: Actions
