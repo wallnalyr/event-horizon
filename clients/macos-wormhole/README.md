@@ -15,9 +15,17 @@ chmod +x build.sh
 ./build.sh
 ```
 
-`build.sh` compiles `main.swift`, assembles `Wormhole.app`, ad-hoc signs it, and
-launches it. Look for the **🌀** in the menu bar. Re-run `build.sh` to rebuild
-(it kills the running instance first).
+`build.sh` compiles `main.swift`, assembles `Wormhole.app`, **installs it to
+`/Applications`** (falls back to `~/Applications` if that isn't writable), ad-hoc
+signs it, and launches it. Look for the **🌀** in the menu bar. Re-run `build.sh`
+to rebuild (it kills the running instance first). Override the location with
+`INSTALL_DIR=~/Applications ./build.sh`.
+
+**Start it automatically:** open the **🌀** menu and turn on **Launch at Login**.
+It registers itself as a login item via `SMAppService` (macOS 13+). Because it
+registers its own bundle path, keep the app in `/Applications` (that's why
+`build.sh` installs there). macOS may ask you to approve it once under
+System Settings ▸ General ▸ Login Items.
 
 ## First run
 
@@ -29,9 +37,9 @@ launches it. Look for the **🌀** in the menu bar. Re-run `build.sh` to rebuild
 3. Type. Changes save to the server (debounced); text from your other devices
    appears within ~2s (it won't clobber what you're actively typing).
 
-**🌀 menu:** Show Wormhole · Set Server URL… · Unlock (sealed session)… · Quit
-(also `⌘Q`). Move the box by dragging its dark header/margins; resize from the
-edges. Position and text are remembered across launches.
+**🌀 menu:** Show Wormhole · Set Server URL… · Unlock (sealed session)… ·
+Launch at Login · Quit (also `⌘Q`). Move the box by dragging its dark
+header/margins; resize from the edges. Position and text are remembered across launches.
 
 ## How it talks to the server
 
